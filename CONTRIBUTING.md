@@ -135,8 +135,7 @@ Before opening the pull request:
       no tool calls.
 - [ ] **Fixtures are synthetic.** Never commit a real transcript: they contain prompts
       and source code.
-- [ ] Runtime added to the `--adapter` help, the README table of session locations, and
-      `CHANGELOG.md`.
+- [ ] Runtime added to the `--adapter` help and the README table of session locations.
 
 If you find yourself wanting to special-case your runtime inside an analyzer, the trace
 model is missing a concept — raise that as the issue instead of adding the branch. That

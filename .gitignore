@@ -80,3 +80,11 @@ Desktop.ini
 .kiro/
 .codex/
 .aiprobe/
+
+# Roadmap and changelog are kept as local working notes for now and deliberately
+# not published, so they are ignored rather than committed. Remove these lines to
+# start publishing them.
+/ROADMAP.md
+/ROADMAP.zh-CN.md
+/CHANGELOG.md
+/CHANGELOG.zh-CN.md

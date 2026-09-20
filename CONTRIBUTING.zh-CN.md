@@ -114,8 +114,7 @@ func Detect(path string) bool                      // discover.go
 - [ ] 缺失的量是 `OptInt`/`OptFloat` 的未知值，不是零，而且一路到 JSON 都是。
 - [ ] 测试覆盖：正常会话、被截断的文件、空文件、以及没有工具调用的会话。
 - [ ] **fixture 是合成的。** 绝不要提交真实转录文件：它们含有 prompt 和源代码。
-- [ ] 运行时已加入 `--adapter` 的帮助文本、README 里的会话位置表格，以及
-      `CHANGELOG.md`。
+- [ ] 运行时已加入 `--adapter` 的帮助文本、以及 README 里的会话位置表格。
 
 如果你发现自己想在某个分析器内部为你的运行时开特例，那说明 trace 模型缺了一个概念——请把
 那个概念作为 issue 提出来，而不是加上那个分支。Kiro 当初正是这样：分析器一行没改，但模型
