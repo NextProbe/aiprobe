@@ -1,0 +1,292 @@
+$ aiprobe demo
+
+
+ AIProbe  ·  A profiler for AI coding agents.
+────────────────────────────────────────────────────────────────────────────
+ session   9f3c71d2-4e8a-4c15-b7a0-2d6ef1a90b34
+ model     claude-sonnet-4-5
+ activity  15 requests · 17 tool calls · 27m
+ project   /Users/dev/code/orders-api  (feat/payments)
+ source    embedded://demo-session.jsonl
+ agent     claude-code 2.0.29
+ demo      synthetic session bundled with AIProbe
+
+ Context Efficiency   31/100  F   ██████░░░░░░░░░░░░░░
+
+   MCP context waste         ~77,280    11%
+   Cache miss waste          154,743    23%
+   Duplicate context        ~164,408    24%
+   ────────────────────────────────────────
+   Potential saving         ~396,431    58%
+   of 681,576 billed input tokens (provider-measured)
+
+   This session cost           $1.65
+   Recoverable                ~$0.95
+
+ 1  WHERE THE TOKENS WENT                     billed input 681,576 measured 
+────────────────────────────────────────────────────────────────────────────
+  System / Rules      ~184,661  █████████████░░░░░░░░░   27.1%  residual  
+  Messages              ~5,401  █░░░░░░░░░░░░░░░░░░░░░    0.8%  calibrated
+  MCP Tool Schema      ~84,360  █████░░░░░░░░░░░░░░░░░   12.4%  estimate  
+  Tool Result          ~55,344  ███░░░░░░░░░░░░░░░░░░░    8.1%  calibrated
+  File Read           ~311,362  ██████████████████████   45.7%  calibrated
+  Bash Output          ~40,448  ██░░░░░░░░░░░░░░░░░░░░    5.9%  calibrated
+
+  fixed overhead per request  ~17,424  (38% of every prompt)
+  conversation at session end  ~46,812 tokens
+  estimator calibrated ×1.00 on 14 measured deltas
+  System / Rules: derived from measured prompt totals minus visible context
+
+ 2  MCP TOOL TAX                           ~5,624 schema tokens per request 
+────────────────────────────────────────────────────────────────────────────
+  6 servers · 41 tools · 2 used (5%) · 5 calls
+
+  server                                tools  used  calls   schema   unused
+  jira                                     12     1      4   ~1,807   ~1,588
+  github                                   10     1      1   ~1,736   ~1,483
+  fetch                                     3     0      0     ~369     ~369
+  postgres                                  6     0      0     ~609     ~609
+  sentry                                    5     0      0     ~513     ~513
+  slack                                     5     0      0     ~590     ~590
+
+  never-called tool schemas: ~77,280 tokens over 15 requests
+  never called: create_issue, list_pull_requests, merge_pull_request, list_…
+  unused servers: fetch, postgres, sentry, slack
+  MCP tool results added ~6,516 tokens of context
+  note: schema token counts are estimates from the local inventory; tool
+        definitions are cache-eligible, so a cache hit bills them at a
+        fraction of the listed cost
+
+ 3  DUPLICATE CONTEXT                                        uniqueness 43% 
+────────────────────────────────────────────────────────────────────────────
+  re-billed: ~164,408 tokens
+  redundant content inserted ~25,628 tokens
+
+  repeated file reads
+   .../internal/payments/authorize.…      3× ~95,130  3 identical, full rea…
+   .../internal/http/handler.go           2× ~18,057  2 identical, full rea…
+
+  repeated shell output
+   go test ./... -v                       4× ~23,681  
+
+  repeated tool results
+   mcp__jira__search_issues               4× ~27,540  exact
+
+  1 recurring passage(s), ~4,860 tokens (overlaps the rows above)
+  note: repeated context blocks overlap the file and tool output findings
+        above and are excluded from the totals
+
+ 4  PROMPT CACHE                                              hit ratio 68% 
+────────────────────────────────────────────────────────────────────────────
+  read 462,639 · write 218,772 · uncached 165
+  cache writes by TTL: 5m 218,772 · 1h 0
+  stable prefix ~46,770 tokens · 52 events · 100% of conversation
+
+  hit ratio per turn  ▁▅██▆█▁▁▁█▅█▇██
+
+  prefix drift: 4 event(s), 154,743 tokens re-billed
+   model changed                                        88,681  2 event(s)
+   cache entry expired before reuse                     42,897  1 event(s)
+   unknown                                              23,165  1 event(s)
+
+  why the prefix changed
+   Turn 7       42,897  cache entry expired before reuse
+            23m idle before this request, beyond the 5 minute cache TTL
+   Turn 8       44,332  model changed
+            model changed from claude-sonnet-4-5 to claude-opus-4-1; cache
+            entries are per-model
+   Turn 9       44,349  model changed
+            model changed from claude-opus-4-1 to claude-sonnet-4-5; cache
+            entries are per-model
+   Turn 11      23,165  unknown
+            no local evidence explains this cache miss; the invalidated
+            prefix is not visible in the transcript (system prompt or tool
+            schema changes are the usual suspects)
+  note: 23,165 tokens of cache miss could not be attributed to a local cause
+        and are reported as unknown
+
+ 5  WHAT IT COST                                                      $1.65 
+────────────────────────────────────────────────────────────────────────────
+
+   Token counts multiplied by a price. The tokens come from the provider's
+   own counters; the price is a list price this tool ships with, so check it
+   against your invoice before quoting the total. Prices and the discount
+   are shown below the table.
+
+   Session cost                                $1.65
+   Recoverable                                ~$0.95    57%
+
+   uncached input                    165      <$0.01
+   output                          1,082       $0.02
+   cache writes                  218,772       $1.49
+   cache reads                   462,639       $0.14
+
+   Model                   Reqs        Cost
+   claude-opus-4-1            1       $0.84
+   claude-sonnet-4-5         14       $0.81
+
+   Rates: built into AIProbe, list prices as of 2026-09.
+   Estimated: the recoverable figure prices analyzer estimates, not billed
+   tokens.
+
+ 6  CONTEXT EFFICIENCY SCORE                       formula: docs/scoring.md 
+────────────────────────────────────────────────────────────────────────────
+  31/100  F   deterministic, no model involved
+
+  Cache efficiency          24/30  █████████░░░  67.9% of prompt tokens ser…
+  Context uniqueness         0/25  ░░░░░░░░░░░░  43.4% of tool output was u…
+  MCP tool utilization       1/15  █░░░░░░░░░░░  2 of 41 loaded tools were …
+  Tool output efficiency     2/15  █░░░░░░░░░░░  38.4% of tool output came …
+  Prefix stability           4/15  ██░░░░░░░░░░  77.3% of prompt tokens avo…
+
+ 7  WHAT TO CHANGE                                            11 finding(s) 
+────────────────────────────────────────────────────────────────────────────
+
+ 1. large files are read end to end when only part of them is…     ~135,721
+                                                                     ~$0.32
+      · .../internal/http/handler.go read in full: ~6,019 tokens, ~84,266
+        re-billed
+      · .../internal/payments/authorize.go read in full: ~5,285 tokens,
+        ~73,990 re-billed
+      · .../internal/payments/authorize.go read in full: ~5,285 tokens,
+        ~58,135 re-billed
+      · .../internal/payments/authorize.go read in full: ~5,285 tokens,
+        ~36,995 re-billed
+      · .../internal/http/handler.go read in full: ~6,019 tokens, ~18,057
+        re-billed
+      · 5 full-file read(s) above 4,000 tokens used no offset/limit
+      Fix: locate the relevant region first (Grep for a symbol, then Read
+           with offset/limit around the hit) and read whole files only when
+           the task genuinely needs every line
+      How to do it:
+        1. locate first: rg -n 'symbolYouNeed' path/ tells you the line
+           numbers
+        … 3 more step(s); use --verbose, --html or --json
+      R011 · Tool output · confidence medium
+
+ 2. the same files are read repeatedly, and every copy stays …     ~113,187
+                                                                     ~$0.27
+      · 2 file(s) were read more than once
+      · .../internal/payments/authorize.go read 3 times: ~10,570 tokens of
+        redundant content, carried forward to ~95,130 tokens of context; 3
+        reads returned identical content; no read used offset/limit
+      · .../internal/http/handler.go read 2 times: ~6,019 tokens of
+        redundant content, carried forward to ~18,057 tokens of context; 2
+        reads returned identical content; no read used offset/limit
+      Fix: read ranges instead of whole files (offset/limit), use Grep to
+           locate the relevant lines first, and re-read only after an edit
+           changes the file rather than to refresh memory
+      How to do it:
+        1. for each file below, find the symbol you actually needed: rg -n
+           'theSymbol' path/to/file
+        … 3 more step(s); use --verbose, --html or --json
+      R003 · Duplicate · confidence high
+
+ 3. switching models mid-session throws away the cached prefi…       88,681
+                                                                     ~$0.21
+      · turn 8: model changed from claude-sonnet-4-5 to claude-opus-4-1;
+        cache entries are per-model (44,332 tokens re-created)
+      · turn 9: model changed from claude-opus-4-1 to claude-sonnet-4-5;
+        cache entries are per-model (44,349 tokens re-created)
+      Fix: pick one model for the length of a session; if a cheaper model is
+           wanted for simple turns, run it in a separate session rather than
+           alternating inside one conversation
+      How to do it:
+        1. pick one model for the length of a session; cache entries are
+           per-model, so alternating throws the prefix away every time
+        … 2 more step(s); use --verbose, --html or --json
+      R006 · Cache · confidence high
+
+ 4. most loaded MCP tool definitions are never called, yet th…      ~77,280
+                                                                     ~$0.18
+      · 2 of 41 loaded MCP tools were called (5% utilization) across 6
+        servers
+      · tool definitions add ~5,624 tokens to every request
+      · never called: mcp__jira__create_issue (~284 schema tokens)
+      · never called: mcp__github__list_pull_requests (~195 schema tokens)
+      · never called: mcp__github__merge_pull_request (~192 schema tokens)
+      · never called: mcp__github__list_workflow_runs (~191 schema tokens)
+      · …and 1 more
+      Fix: load MCP tools lazily instead of all at once: keep only the
+           servers this workflow needs enabled in .mcp.json, split large
+           servers so unrelated tools are not loaded together, and enable
+           the rest on demand per session
+      How to do it:
+        1. list what is actually loaded: aiprobe analyze --tools
+           inventory.json, then read the MCP Tool Tax section for the
+           never-called tools
+        … 3 more step(s); use --verbose, --html or --json
+      R001 · MCP · confidence high
+
+ 5. individual tool results are large enough to dominate the …      ~75,443
+                                                                     ~$0.18
+      · 5 tool result(s) exceeded 4,000 tokens each
+      · /Users/dev/code/orders-api/internal/http/handler.go (Read): ~6,019
+        tokens, ~84,266 tokens re-billed while resident
+      · /Users/dev/code/orders-api/internal/payments/authorize.go (Read):
+        ~5,285 tokens, ~73,990 tokens re-billed while resident
+      · /Users/dev/code/orders-api/internal/payments/authorize.go (Read):
+        ~5,285 tokens, ~58,135 tokens re-billed while resident
+      · /Users/dev/code/orders-api/internal/payments/authorize.go (Read):
+        ~5,285 tokens, ~36,995 tokens re-billed while resident
+      · /Users/dev/code/orders-api/internal/http/handler.go (Read): ~6,019
+        tokens, ~18,057 tokens re-billed while resident
+      Fix: cap tool output at the source: pass limit/head arguments, select
+           fields instead of returning whole documents, and prefer a
+           targeted search over dumping an entire file or result set
+      How to do it:
+        1. for each result below, find the argument that limits it: limit,
+           head, --max-count, LIMIT in SQL, a field selector
+        … 3 more step(s); use --verbose, --html or --json
+      R010 · Tool output · confidence medium
+
+ 6. idle gaps let the cached prefix expire, so the next reque…       42,897
+                                                                     ~$0.10
+      · turn 7: 23m idle, 42,897 tokens re-created
+      · 1 expiry event(s), 42,897 tokens total
+      Fix: work in continuous stretches rather than returning to a session
+           after long pauses, and prefer the 1 hour cache TTL for sessions
+           with natural think-time between turns
+      How to do it:
+        1. note the idle gaps listed above; those are where the cached
+           prefix expired
+        … 2 more step(s); use --verbose, --html or --json
+      R005 · Cache · confidence high
+
+ 7. MCP servers are loaded for this project but were never us…      ~31,215
+                                                                    ~$0.074
+      · server "fetch" produced zero tool calls in this session
+      · server "postgres" produced zero tool calls in this session
+      · server "sentry" produced zero tool calls in this session
+      · server "slack" produced zero tool calls in this session
+      Fix: remove or disable these servers for this project in .mcp.json; if
+           they are needed occasionally, move them to a separate profile
+           enabled only for the sessions that need them
+      How to do it:
+        1. confirm the servers below are the ones you expect to be idle, not
+           ones that failed to start (a crashed server also produces zero
+           calls)
+        … 2 more step(s); use --verbose, --html or --json
+      R002 · MCP · confidence high
+
+ 8. tool calls keep returning the same payload, and each copy…      ~27,540
+                                                                    ~$0.066
+      · 1 group(s) of repeated tool output
+      · mcp__jira__search_issues returned 4 exact payloads of ~1,620 tokens
+      Fix: filter tool output before it enters context: request only the
+           fields needed, page through large result sets instead of
+           refetching, and compress or summarize repeated payloads rather
+           than returning them verbatim
+      How to do it:
+        1. look at what the repeated payloads have in common: the same query
+           re-run, or a full result set fetched again to read one field
+        … 3 more step(s); use --verbose, --html or --json
+      R008 · Duplicate · confidence high
+
+  … 3 more finding(s); use --json or --html for the full list
+
+────────────────────────────────────────────────────────────────────────────
+ local only · read only · no network · no telemetry
+ prompts and file contents never leave this machine
+ aiprobe 0.1.0-dev+20260917060942 · adapter claude-code
+

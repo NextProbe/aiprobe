@@ -1,0 +1,82 @@
+name: Support another agent
+description: Ask for, or propose, an adapter for a runtime AIProbe does not read yet
+labels: [adapter]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Adapters are the most useful thing to add. See
+        [CONTRIBUTING.md](https://github.com/NextProbe/aiprobe/blob/main/CONTRIBUTING.md#adding-an-adapter)
+        for what one involves.
+
+        The questions below are the ones that decide whether an adapter is
+        feasible, so answering them is most of the work of scoping it.
+
+  - type: input
+    id: runtime
+    attributes:
+      label: Which agent
+      placeholder: Codex CLI, Cursor, Cline, Aider, ...
+    validations:
+      required: true
+
+  - type: input
+    id: location
+    attributes:
+      label: Where does it store session data
+      description: A path pattern, not a real file.
+      placeholder: ~/.codex/sessions/<id>/events.jsonl
+    validations:
+      required: true
+
+  - type: dropdown
+    id: usage
+    attributes:
+      label: Does it record provider token usage
+      description: >
+        Per-request input/output token counts from the provider. Without them, every
+        figure becomes an estimate, which AIProbe supports but reports
+        differently.
+      options:
+        - "Yes, per request"
+        - "Only a session total"
+        - "No, it bills in credits or reports a percentage"
+        - Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: cache
+    attributes:
+      label: Does it record prompt cache counters
+      options:
+        - "Yes"
+        - "No"
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: transient
+    attributes:
+      label: Does it keep everything in context
+      description: >
+        Some runtimes drop content after a single prompt — file-write bodies, for
+        instance. Charging that to every later request overstates a session badly,
+        so it matters whether this runtime does it.
+
+  - type: textarea
+    id: sample
+    attributes:
+      label: A synthetic sample of the format
+      description: >
+        One or two records with the values replaced by placeholders. Do not paste a
+        real transcript.
+      render: json
+
+  - type: checkboxes
+    id: offer
+    attributes:
+      label: Are you offering to write it
+      options:
+        - label: I would like to implement this myself

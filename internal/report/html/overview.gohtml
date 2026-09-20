@@ -1,0 +1,415 @@
+{{- /* Cross-session overview. Shares style.css and app.js with the single-session
+       report so the two read as one product, but it is a separate document: it
+       answers "what do I keep doing wrong" rather than "what happened here". */ -}}
+<!DOCTYPE html>
+<html lang="{{.Lang}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>{{.Title}}</title>
+<style>{{.CSS}}</style>
+<script>{{.ThemeJS}}</script>
+</head>
+<body>
+{{/* The same container as the single-session report. It has to be this class:
+     .page was never defined in the stylesheet, so the page rendered edge to edge
+     with no max width. */}}
+<div class="wrap">
+{{.ThemeToggle}}
+
+{{- $o := .Overview }}
+
+{{/* Above the masthead, for the same reason as the single-session report: the
+     masthead is most of a screen, and navigation below it is below the fold. */}}
+{{- if or .Nav .Locales}}
+<nav class="sitenav top" aria-label="{{T "app.name"}}">
+  {{- if .Nav}}
+  <div class="sitenav-links">
+    {{- range .Nav}}
+    <a class="navlink{{if .Current}} on{{end}}{{if .Back}} back{{end}}" href="{{.Href}}"{{if .Current}} aria-current="page"{{end}}>{{.Label}}</a>
+    {{- end}}
+  </div>
+  {{- end}}
+  {{- if .Locales}}
+  <div class="sitenav-lang">
+    <span class="langbar-label">{{T "serve.language"}}</span>
+    {{- range .Locales}}
+    <a class="lang{{if .Selected}} on{{end}}" href="{{.Href}}"{{if .Selected}} aria-current="true"{{end}}>{{.Name}}</a>
+    {{- end}}
+  </div>
+  {{- end}}
+</nav>
+{{- end}}
+
+<header class="masthead">
+  <div>
+    <div class="brand">AI<span>Probe</span></div>
+    <h1 class="scope">{{if eq $o.Adapter "all"}}{{T "overview.title"}}{{else}}{{Targs "overview.title.runtime" "runtime" $o.Adapter}}{{end}}</h1>
+    <p class="tagline">{{T "overview.subtitle"}}</p>
+    <dl class="meta-grid">
+      <dt>{{T "meta.agent"}}</dt><dd>{{runtime $o.Adapter}}</dd>
+      <dt>{{T "overview.stat.sessions"}}</dt><dd>{{$o.Sessions}}</dd>
+      <dt>{{T "meta.activity"}}</dt><dd>{{Targs "meta.activity.value" "requests" $o.Totals.Requests "tools" $o.Totals.ToolCalls "duration" (dur $o.Totals.DurationSecs)}}</dd>
+      {{- if $o.Models}}<dt>{{T "meta.model"}}</dt><dd>{{range $i, $m := $o.Models}}{{if $i}} · {{end}}{{shortmodel $m.Label}} ×{{$m.Count}}{{end}}</dd>{{end}}
+      <dt>{{T "meta.generated"}}</dt><dd>{{.Generated}} · aiprobe {{.Version}}</dd>
+    </dl>
+  </div>
+
+  <div class="score-card">
+    <div class="score-figure">{{.Donut}}</div>
+    <div class="score-detail">
+      <table class="headline">
+        <tr>
+          <td class="label">{{T "overview.waste.mcp"}}</td>
+          <td class="num">{{sum $o.Waste.MCP}}</td>
+          <td class="num share">{{sumshare $o.Waste.MCP $o.Totals.ContextTokens}}</td>
+        </tr>
+        <tr>
+          <td class="label">{{T "overview.waste.cache"}}</td>
+          <td class="num">{{sum $o.Waste.CacheMiss}}</td>
+          <td class="num share">{{sumshare $o.Waste.CacheMiss $o.Totals.ContextTokens}}</td>
+        </tr>
+        <tr>
+          <td class="label">{{T "overview.waste.duplicate"}}</td>
+          <td class="num">{{sum $o.Waste.Duplicate}}</td>
+          <td class="num share">{{sumshare $o.Waste.Duplicate $o.Totals.ContextTokens}}</td>
+        </tr>
+        <tr class="total">
+          <td class="label">{{T "overview.waste.total"}}</td>
+          <td class="num">{{sum $o.Waste.Total}}</td>
+          <td class="num share">{{pctr $o.Waste.Share}}</td>
+        </tr>
+      </table>
+      <p class="caption">
+        {{- Targs "headline.of" "total" (int $o.Totals.ContextTokens) "label" (pick ($o.Totals.AllMeasured $o.Sessions) (T "headline.billed") (T "headline.exposure"))}}
+        {{- if $o.Totals.CostUnit}} {{Targs "headline.credits" "amount" (printf "%.2f" $o.Totals.CostAmount) "unit" $o.Totals.CostUnit}}{{end}}
+      </p>
+      {{- with $sp := $o.Spend}}
+      {{- if .Priced}}
+      <div class="money">
+        <div class="money-figure">
+          <span class="money-label">{{T "overview.spend.total"}}</span>
+          <strong class="money-value">{{msum .Total $sp.Currency false}}</strong>
+        </div>
+        <div class="money-figure saving">
+          <span class="money-label">{{T "overview.spend.saveable"}}</span>
+          <strong class="money-value">{{msum .Recoverable $sp.Currency true}}</strong>
+          {{- if .Share}}<span class="money-sub">{{pctr .Share}}</span>{{end}}
+        </div>
+      </div>
+      <p class="note">{{spendbasis $sp}}</p>
+      {{- if .UnpricedModels}}<p class="note warn">{{Targs "spend.unpriced" "models" (shortmodels .UnpricedModels)}}</p>{{end}}
+      {{- if .Approximate}}<p class="note warn">{{Targs "overview.spend.approximate" "models" (shortmodels .ApproximatedModels)}}</p>{{end}}
+      {{- else if .UnpricedModels}}
+      <p class="note warn">{{Targs "spend.why.no_price" "model" (shortmodels .UnpricedModels)}}</p>
+      {{- end}}
+      {{- end}}
+      <ul class="caveats">
+        {{- range notes $o.Notes $o.NoteMsgs}}<li>{{.}}</li>{{end}}
+      </ul>
+    </div>
+  </div>
+</header>
+
+<nav class="tabs" role="tablist" aria-label="{{T "tab.sections"}}">
+  <button class="tab" role="tab" data-target="panel-summary" aria-selected="true" aria-controls="panel-summary">{{T "overview.tab.summary"}}</button>
+  <button class="tab" role="tab" data-target="panel-habits" aria-controls="panel-habits">{{T "overview.tab.findings"}}<span class="count">{{len $o.Findings}}</span></button>
+  <button class="tab" role="tab" data-target="panel-sessions" aria-controls="panel-sessions">{{T "overview.tab.sessions"}}<span class="count">{{$o.Sessions}}</span></button>
+  <button class="tab" role="tab" data-target="panel-tools" aria-controls="panel-tools">{{T "overview.tab.tools"}}</button>
+  <button class="tab" role="tab" data-target="panel-method" aria-controls="panel-method">{{T "overview.tab.method"}}</button>
+</nav>
+
+{{/* ---------------- summary ---------------- */}}
+<section class="panel active" id="panel-summary" role="tabpanel" aria-label="{{T "overview.tab.summary"}}">
+  <div class="card">
+    <h2>{{T "overview.breakdown.title"}}</h2>
+    <div class="stat-row">
+      <div class="stat">
+        <div class="k">{{T "overview.stat.sessions"}}</div>
+        <div class="v">{{$o.Sessions}}</div>
+        <div class="n">{{runtime $o.Adapter}}</div>
+      </div>
+      <div class="stat">
+        <div class="k">{{if $o.Totals.AllMeasured $o.Sessions}}{{T "overview.stat.context"}}{{else}}{{T "overview.stat.exposure"}}{{end}}</div>
+        <div class="v">{{int $o.Totals.ContextTokens}}</div>
+        <div class="n">{{if $o.Totals.AllMeasured $o.Sessions}}{{T "value.measured"}}{{else}}{{T "value.estimated"}}{{end}}</div>
+      </div>
+      <div class="stat">
+        <div class="k">{{T "overview.stat.requests"}}</div>
+        <div class="v">{{int $o.Totals.Requests}}</div>
+        <div class="n">{{Targs "overview.stat.toolcalls" "calls" (int $o.Totals.ToolCalls)}}</div>
+      </div>
+      <div class="stat">
+        <div class="k">{{T "overview.stat.saving"}}</div>
+        <div class="v bad">{{sum $o.Waste.Total}}</div>
+        <div class="n">{{pctr $o.Waste.Share}}</div>
+      </div>
+      {{- if $o.Totals.CostUnit}}
+      <div class="stat">
+        <div class="k">{{T "overview.stat.cost"}}</div>
+        <div class="v">{{printf "%.2f" $o.Totals.CostAmount}}</div>
+        <div class="n">{{$o.Totals.CostUnit}} · {{T "grade.exact"}}</div>
+      </div>
+      {{- end}}
+      <div class="stat">
+        <div class="k">{{T "overview.stat.score"}}</div>
+        <div class="v {{scoreclass $o.Scores.Median}}">{{if $o.Scores.Evaluated}}{{$o.Scores.Median}}{{else}}{{T "value.na"}}{{end}}</div>
+        <div class="n">{{if $o.Scores.Evaluated}}{{Targs "overview.scores.range" "worst" $o.Scores.Worst "best" $o.Scores.Best}}{{else}}{{T "overview.scores.none"}}{{end}}</div>
+      </div>
+    </div>
+
+    {{- if $o.Categories}}
+    {{.BreakdownBar}}
+    <div class="legend">
+      {{- range $o.Categories}}{{if .Billed}}
+      <span class="item"><span class="swatch" style="background:{{catcolor .Category}}"></span>{{cat .Category}} {{pct .Share}}</span>
+      {{- end}}{{end}}
+    </div>
+
+    <table class="data" style="margin-top:18px">
+      <thead>
+        <tr>
+          <th class="sortable">{{T "breakdown.col.category"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "breakdown.col.cumulative"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "breakdown.col.share"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "breakdown.col.inserted"}}</th>
+          <th class="sortable">{{T "breakdown.col.method"}}</th>
+          <th style="width:170px">&nbsp;</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{- range $o.Categories}}
+        <tr>
+          <td><span class="swatch" style="display:inline-block;width:9px;height:9px;border-radius:3px;background:{{catcolor .Category}};margin-right:7px"></span>{{cat .Category}}</td>
+          <td class="num" data-sort="{{.Billed}}">~{{int .Billed}}</td>
+          <td class="num" data-sort="{{.Share}}">{{pct .Share}}</td>
+          <td class="num" data-sort="{{.Inserted}}">~{{int .Inserted}}</td>
+          <td><span class="tag">{{methodName .Method}}</span>{{if .Unknown}} <span class="est">{{Targs "overview.waste.unknown_in" "count" .Unknown "total" $o.Sessions}}</span>{{end}}</td>
+          <td class="bar-cell"><div class="bar"><i style="width:{{barwidth .Billed $.MaxCategory}};background:{{catcolor .Category}}"></i></div></td>
+        </tr>
+        {{- end}}
+      </tbody>
+    </table>
+    {{- end}}
+  </div>
+
+  <div class="card">
+    <h2>{{T "overview.scores.title"}}</h2>
+    {{- if $o.Scores.Evaluated}}
+    <p class="sub">{{Targs "overview.scores.median" "value" $o.Scores.Median "grade" $o.Scores.MedianGrade}} · {{Targs "overview.scores.range" "worst" $o.Scores.Worst "best" $o.Scores.Best}}</p>
+    <table class="data">
+      <thead>
+        <tr>
+          <th>{{T "score.col.component"}}</th>
+          <th class="num" style="text-align:right">{{T "overview.col.sessions"}}</th>
+          <th style="width:60%">&nbsp;</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{- range $o.Scores.Grades}}
+        <tr>
+          <td><span class="tag" style="color:{{gradecolor .Label}};border-color:{{gradecolor .Label}}">{{.Label}}</span></td>
+          <td class="num">{{.Count}}</td>
+          <td class="bar-cell"><div class="bar"><i style="width:{{barwidth .Count $o.Scores.Evaluated}};background:{{gradecolor .Label}}"></i></div></td>
+        </tr>
+        {{- end}}
+      </tbody>
+    </table>
+    {{- if $o.Scores.NotApplicable}}<p class="note">{{Targs "overview.scores.notapplicable" "count" $o.Scores.NotApplicable}}</p>{{end}}
+    {{- else}}
+    <p class="empty">{{T "overview.scores.none"}}</p>
+    {{- end}}
+  </div>
+</section>
+
+{{/* ---------------- habits ---------------- */}}
+<section class="panel" id="panel-habits" role="tabpanel" aria-label="{{T "overview.tab.findings"}}">
+  <div class="card">
+    <h2>{{T "overview.findings.title"}}</h2>
+    <p class="sub">{{T "overview.findings.intro"}}</p>
+    {{- if not $o.Findings}}
+    <p class="ok">{{T "overview.findings.none"}}</p>
+    {{- end}}
+  </div>
+  {{- range $i, $f := $o.Findings}}
+  <article class="finding {{confclass $f.Confidence}}">
+    <header>
+      <h3>{{add $i 1}}. {{oissue $f}}</h3>
+      <div class="waste{{if not $f.Wasted.Complete}} unknown{{end}}">
+        {{- if $f.Wasted.Tokens}}~{{int $f.Wasted.Tokens}} {{T "findings.tokens"}}
+        {{- else}}{{T "findings.waste_unknown"}}{{end}}
+      </div>
+    </header>
+    <ul>
+      <li>{{Targs "overview.findings.in_sessions" "count" $f.Sessions "total" $o.Sessions}}</li>
+      {{- if $f.Examples}}<li class="est">{{join $f.Examples}}</li>{{end}}
+      {{- if not $f.Wasted.Complete}}<li>{{Targs "overview.waste.unknown_in" "count" $f.Wasted.Unknown "total" $f.Sessions}}</li>{{end}}
+    </ul>
+    <p class="fix"><b>{{T "findings.fix"}}</b> {{ofix $f}}</p>
+    {{- with rulesteps $f.ID}}
+    <div class="steps">
+      <b>{{T "findings.steps"}}</b>
+      <ol>{{range .}}<li>{{.}}</li>{{end}}</ol>
+    </div>
+    {{- end}}
+    {{- with ruletools $f.ID}}
+    <div class="tools">
+      <b>{{T "findings.tools"}}</b>
+      <p class="tools-intro">{{T "findings.tools.intro"}}</p>
+      {{- range .}}
+      <div class="tool">
+        <div class="tool-head"><span class="tool-name">{{.Name}}</span> {{.What}}</div>
+        {{- if .Install}}<pre class="tool-install">{{.Install}}</pre>{{end}}
+        {{- if .Verify}}<div class="tool-verify"><b>{{T "findings.tools.verify"}}</b> {{.Verify}}</div>{{end}}
+        {{- if .DocRef}}<div class="tool-doc">{{Targs "findings.tools.docs" "path" .DocRef}}</div>{{end}}
+      </div>
+      {{- end}}
+    </div>
+    {{- end}}
+    <div class="foot">
+      <span>{{Targs "findings.rule" "id" $f.ID}}</span>
+      <span>{{Targs "findings.area" "area" (area $f.Area)}}</span>
+      <span>{{Targs "findings.confidence" "level" (conf $f.Confidence)}}</span>
+      <span class="bar-inline"><span class="bar"><i style="width:{{barwidth $f.Sessions $o.Sessions}}"></i></span></span>
+    </div>
+  </article>
+  {{- end}}
+</section>
+
+{{/* ---------------- sessions ---------------- */}}
+<section class="panel" id="panel-sessions" role="tabpanel" aria-label="{{T "overview.tab.sessions"}}">
+  <div class="card">
+    <h2>{{T "overview.sessions.title"}}</h2>
+    <p class="sub">{{T "overview.sessions.intro"}}</p>
+    <table class="data">
+      <thead>
+        <tr>
+          <th class="sortable">{{T "overview.col.session"}}</th>
+          <th class="sortable">{{T "overview.col.when"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "overview.col.requests"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "overview.col.context"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "overview.col.waste"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "overview.col.share"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "overview.col.score"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "overview.col.findings"}}</th>
+          {{- if $.ReportHref}}<th></th>{{end}}
+        </tr>
+      </thead>
+      <tbody>
+        {{- range $o.Worst}}
+        <tr>
+          <td>
+            <div>{{clip .Title 54}}</div>
+            <div class="est mono">{{clip .SessionID 40}}{{if .Model}} · {{shortmodel .Model}}{{end}}</div>
+          </td>
+          <td class="est" data-sort="{{.StartUnix}}">{{ts .StartUnix}}</td>
+          <td class="num">{{int .Requests}}</td>
+          <td class="num" data-sort="{{.ContextTokens}}">{{if .Measured}}{{int .ContextTokens}}{{else}}~{{int .ContextTokens}}{{end}}</td>
+          <td class="num bad" data-sort="{{.Wasted}}">~{{int .Wasted}}</td>
+          <td class="num" data-sort="{{.WastedShare}}">{{pctr .WastedShare}}</td>
+          <td class="num" data-sort="{{.Score}}"><span class="{{scoreclass .Score}}">{{if .Grade}}{{.Score}} {{.Grade}}{{else}}{{T "value.na"}}{{end}}</span></td>
+          <td class="num">{{.Findings}}</td>
+          {{- if $.ReportHref}}
+          <td style="white-space:nowrap"><a class="btn" href="{{reporthref $.ReportHref .ID}}">{{T "overview.open"}}</a></td>
+          {{- end}}
+        </tr>
+        {{- end}}
+      </tbody>
+    </table>
+  </div>
+
+  {{- if $o.Failed}}
+  <div class="card">
+    <h2>{{T "overview.failed.title"}}</h2>
+    <p class="sub">{{T "overview.failed.intro"}}</p>
+    <table class="data">
+      <tbody>
+        {{- range $o.Failed}}
+        <tr><td class="mono">{{shortpath .Path}}</td><td class="est">{{.Error}}</td></tr>
+        {{- end}}
+      </tbody>
+    </table>
+  </div>
+  {{- end}}
+</section>
+
+{{/* ---------------- tools ---------------- */}}
+<section class="panel" id="panel-tools" role="tabpanel" aria-label="{{T "overview.tab.tools"}}">
+  <div class="card">
+    <h2>{{T "overview.tools.title"}}</h2>
+    <p class="sub">{{T "overview.tools.intro"}}</p>
+    {{- if $o.Tools}}
+    <table class="data">
+      <thead>
+        <tr>
+          <th class="sortable">{{T "tools.col.tool"}}</th>
+          <th class="sortable">{{T "tools.col.class"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "overview.col.sessions"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "tools.col.calls"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "tools.col.result"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "tools.col.billed"}}</th>
+          <th style="width:130px">&nbsp;</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{- range $o.Tools}}
+        <tr>
+          <td class="mono">{{.Name}}</td>
+          <td class="est">{{toolclass .Class}}</td>
+          <td class="num">{{.Sessions}}</td>
+          <td class="num">{{int .Calls}}</td>
+          <td class="num">~{{int .ResultTokens}}</td>
+          <td class="num">~{{int .BilledTokens}}</td>
+          <td class="bar-cell"><div class="bar"><i style="width:{{barwidth .BilledTokens $.MaxToolTokens}};background:{{catcolor .Class.Category}}"></i></div></td>
+        </tr>
+        {{- end}}
+      </tbody>
+    </table>
+    {{- else}}<p class="empty">{{T "tools.none"}}</p>{{end}}
+  </div>
+</section>
+
+{{/* ---------------- method ---------------- */}}
+<section class="panel" id="panel-method" role="tabpanel" aria-label="{{T "overview.tab.method"}}">
+  <div class="card">
+    <h2>{{T "method.title"}}</h2>
+    <p class="sub">{{T "overview.subtitle"}}</p>
+    <ul>
+      {{- range notes $o.Notes $o.NoteMsgs}}<li>{{.}}</li>{{end}}
+    </ul>
+    <table class="data" style="margin-top:18px">
+      <thead><tr><th>{{T "method.col.value"}}</th><th>{{T "method.col.provenance"}}</th></tr></thead>
+      <tbody>
+        <tr><td>{{T "method.row.measured"}}</td><td>{{T "method.row.measured.d"}}</td></tr>
+        <tr><td>{{T "method.row.category"}}</td><td>{{T "method.row.category.d"}}</td></tr>
+        <tr><td>{{T "method.row.system"}}</td><td>{{T "method.row.system.d"}}</td></tr>
+        <tr><td>{{T "method.row.mcp"}}</td><td>{{T "method.row.mcp.d"}}</td></tr>
+        <tr><td>{{T "method.row.dup"}}</td><td>{{T "method.row.dup.d"}}</td></tr>
+        <tr><td>{{T "method.row.drift"}}</td><td>{{T "method.row.drift.d"}}</td></tr>
+        <tr><td>{{T "method.row.score"}}</td><td>{{T "method.row.score.d"}}</td></tr>
+      </tbody>
+    </table>
+    <p class="note">{{T "method.marker"}}</p>
+  </div>
+  <div class="card">
+    <h2>{{T "privacy.title"}}</h2>
+    <p class="sub">{{T "privacy.intro"}}</p>
+    <ul>
+      <li>{{T "privacy.1"}}</li>
+      <li>{{T "privacy.2"}}</li>
+      <li>{{T "privacy.3"}}</li>
+      <li>{{T "privacy.4"}}</li>
+    </ul>
+  </div>
+</section>
+
+<footer class="foot">
+  <p><b>{{T "app.name"}} {{.Version}}</b> · {{Targs "serve.count" "count" $o.Sessions}} · {{runtime $o.Adapter}} · {{.Generated}}</p>
+  <p>{{T "app.footer.privacy"}} · {{T "app.footer.prompts"}}</p>
+</footer>
+
+</div>
+<script>{{.JS}}</script>
+</body>
+</html>

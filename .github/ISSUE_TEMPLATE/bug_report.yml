@@ -1,0 +1,77 @@
+name: Bug report
+description: Something is broken or a number looks wrong
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not attach a session transcript.** They contain your prompts, file
+        contents and command output. Describe the shape of the session instead, or
+        paste only the part of `--json` output that is wrong.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What did you run, and what did it do?
+      placeholder: |
+        $ aiprobe analyze
+        ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+      description: >
+        For a wrong number, say what you believe the right answer is and how you
+        know. That is usually the most useful part of the report.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: runtime
+    attributes:
+      label: Agent runtime
+      options:
+        - Claude Code
+        - Kiro
+        - The bundled demo session
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: AIProbe version
+      description: Output of `aiprobe --version`
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: OS and Go version
+      placeholder: macOS 15.3 (arm64), go1.25.1
+    validations:
+      required: true
+
+  - type: textarea
+    id: session-shape
+    attributes:
+      label: Session shape
+      description: >
+        Roughly how many requests and tool calls, whether MCP servers were
+        involved, and whether the report's `parsing` line mentioned skipped lines.
+      placeholder: ~40 requests, 2 MCP servers, no skipped lines
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I have not attached a real session transcript
+          required: true
+        - label: I checked whether `aiprobe demo` also shows the problem

@@ -1,0 +1,1077 @@
+{
+  "meta": {
+    "generated_by": "internal/demo/gen.go",
+    "note": "not a real deployment; tool names and schemas are representative of common MCP servers",
+    "purpose": "synthetic MCP tool inventory for `aiprobe demo`"
+  },
+  "servers": {
+    "fetch": {
+      "tools": [
+        {
+          "name": "fetch_url",
+          "description": "Fetch a URL and return the response body converted to Markdown.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "headers": {
+                "description": "Additional request headers.",
+                "type": "object"
+              },
+              "maxBytes": {
+                "description": "Truncate the response after this many bytes.",
+                "type": "integer"
+              },
+              "url": {
+                "description": "Absolute URL to fetch.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "url"
+            ],
+            "type": "object"
+          }
+        },
+        {
+          "name": "fetch_json",
+          "description": "Fetch a URL and parse the response as JSON.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "body": {
+                "description": "Request body for POST or PUT.",
+                "type": "string"
+              },
+              "method": {
+                "description": "HTTP method.",
+                "type": "string"
+              },
+              "url": {
+                "description": "Absolute URL to fetch.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "url"
+            ],
+            "type": "object"
+          }
+        },
+        {
+          "name": "extract_links",
+          "description": "Fetch a page and return every outbound link with its anchor text.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "sameHost": {
+                "description": "Only return links on the same host.",
+                "type": "boolean"
+              },
+              "url": {
+                "description": "Absolute URL to fetch.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "url"
+            ],
+            "type": "object"
+          }
+        }
+      ]
+    },
+    "github": {
+      "tools": [
+        {
+          "name": "create_pull_request",
+          "description": "Open a pull request from a head branch into a base branch with a title and body.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "base": {
+                "description": "Branch the changes are merged into.",
+                "type": "string"
+              },
+              "body": {
+                "description": "Pull request description in Markdown.",
+                "type": "string"
+              },
+              "draft": {
+                "description": "Open the pull request as a draft.",
+                "type": "boolean"
+              },
+              "head": {
+                "description": "Branch containing the changes.",
+                "type": "string"
+              },
+              "owner": {
+                "description": "Repository owner login.",
+                "type": "string"
+              },
+              "repo": {
+                "description": "Repository name.",
+                "type": "string"
+              },
+              "title": {
+                "description": "Pull request title.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "owner",
+              "repo",
+              "title",
+              "head",
+              "base"
+            ],
+            "type": "object"
+          }
+        },
+        {
+          "name": "list_pull_requests",
+          "description": "List pull requests in a repository filtered by state, base branch or author.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "base": {
+                "description": "Filter by base branch.",
+                "type": "string"
+              },
+              "owner": {
+                "description": "Repository owner login.",
+                "type": "string"
+              },
+              "repo": {
+                "description": "Repository name.",
+                "type": "string"
+              },
+              "sort": {
+                "description": "Sort field: created, updated, popularity.",
+                "type": "string"
+              },
+              "state": {
+                "description": "Filter by state: open, closed or all.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "owner",
+              "repo"
+            ],
+            "type": "object"
+          }
+        },
+        {
+          "name": "get_pull_request_diff",
+          "description": "Fetch the unified diff of a pull request, optionally limited to specific files.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "owner": {
+                "description": "Repository owner login.",
+                "type": "string"
+              },
+              "paths": {
+                "description": "Restrict the diff to these paths.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "pullNumber": {
+                "description": "Pull request number.",
+                "type": "integer"
+              },
+              "repo": {
+                "description": "Repository name.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "owner",
+              "repo",
+              "pullNumber"
+            ],
+            "type": "object"
+          }
+        },
+        {
+          "name": "create_issue_comment",
+          "description": "Add a comment to an issue or pull request.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "body": {
+                "description": "Comment body in Markdown.",
+                "type": "string"
+              },
+              "issueNumber": {
+                "description": "Issue or pull request number.",
+                "type": "integer"
+              },
+              "owner": {
+                "description": "Repository owner login.",
+                "type": "string"
+              },
+              "repo": {
+                "description": "Repository name.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "owner",
+              "repo",
+              "issueNumber",
+              "body"
+            ],
+            "type": "object"
+          }
+        },
+        {
+          "name": "list_workflow_runs",
+          "description": "List GitHub Actions workflow runs with status, conclusion and timing.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "branch": {
+                "description": "Filter by branch.",
+                "type": "string"
+              },
+              "owner": {
+                "description": "Repository owner login.",
+                "type": "string"
+              },
+              "repo": {
+                "description": "Repository name.",
+                "type": "string"
+              },
+              "status": {
+                "description": "Filter by status such as completed or in_progress.",
+                "type": "string"
+              },
+              "workflow": {
+                "description": "Workflow file name or id.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "owner",
+              "repo"
+            ],
+            "type": "object"
+          }
+        },
+        {
+          "name": "get_workflow_run_logs",
+          "description": "Download the logs of a workflow run as text, optionally for one job.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "jobId": {
+                "description": "Restrict to a single job id.",
+                "type": "integer"
+              },
+              "owner": {
+                "description": "Repository owner login.",
+                "type": "string"
+              },
+              "repo": {
+                "description": "Repository name.",
+                "type": "string"
+              },
+              "runId": {
+                "description": "Workflow run id.",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "owner",
+              "repo",
+              "runId"
+            ],
+            "type": "object"
+          }
+        },
+        {
+          "name": "search_code",
+          "description": "Search code across repositories with GitHub's code search syntax.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "perPage": {
+                "description": "Results per page.",
+                "type": "integer"
+              },
+              "query": {
+                "description": "Search query using GitHub code search qualifiers.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "query"
+            ],
+            "type": "object"
+          }
+        },
+        {
+          "name": "create_branch",
+          "description": "Create a branch from a source ref.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "branch": {
+                "description": "New branch name.",
+                "type": "string"
+              },
+              "fromRef": {
+                "description": "Ref to branch from.",
+                "type": "string"
+              },
+              "owner": {
+                "description": "Repository owner login.",
+                "type": "string"
+              },
+              "repo": {
+                "description": "Repository name.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "owner",
+              "repo",
+              "branch",
+              "fromRef"
+            ],
+            "type": "object"
+          }
+        },
+        {
+          "name": "merge_pull_request",
+          "description": "Merge a pull request using merge, squash or rebase.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "commitTitle": {
+                "description": "Title for the merge commit.",
+                "type": "string"
+              },
+              "mergeMethod": {
+                "description": "One of merge, squash or rebase.",
+                "type": "string"
+              },
+              "owner": {
+                "description": "Repository owner login.",
+                "type": "string"
+              },
+              "pullNumber": {
+                "description": "Pull request number.",
+                "type": "integer"
+              },
+              "repo": {
+                "description": "Repository name.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "owner",
+              "repo",
+              "pullNumber"
+            ],
+            "type": "object"
+          }
+        },
+        {
+          "name": "list_releases",
+          "description": "List releases with tags, names and publication dates.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "owner": {
+                "description": "Repository owner login.",
+                "type": "string"
+              },
+              "perPage": {
+                "description": "Results per page.",
+                "type": "integer"
+              },
+              "repo": {
+                "description": "Repository name.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "owner",
+              "repo"
+            ],
+            "type": "object"
+          }
+        }
+      ]
+    },
+    "jira": {
+      "tools": [
+        {
+          "name": "search_issues",
+          "description": "Search issues with a JQL query and return matching issues with their fields, labels, assignee and description.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "expand": {
+                "description": "Comma separated list of entities to expand, such as changelog or renderedFields.",
+                "type": "string"
+              },
+              "fields": {
+                "description": "Field names to include in the response.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "jql": {
+                "description": "JQL query string, for example: project = ORD AND status != Done",
+                "type": "string"
+              },
+              "maxResults": {
+                "description": "Maximum number of issues to return, between 1 and 100.",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "jql"
+            ],
+            "type": "object"
+          }
+        },
+        {
+          "name": "get_issue",
+          "description": "Fetch a single issue by key, including comments, attachments and the full change history.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "expand": {
+                "description": "Entities to expand in the response.",
+                "type": "string"
+              },
+              "issueKey": {
+                "description": "Issue key such as ORD-412.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "issueKey"
+            ],
+            "type": "object"
+          }
+        },
+        {
+          "name": "create_issue",
+          "description": "Create a new issue in a project with a summary, description, type and optional labels and assignee.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "assignee": {
+                "description": "Account id of the assignee.",
+                "type": "string"
+              },
+              "description": {
+                "description": "Full issue description in wiki markup.",
+                "type": "string"
+              },
+              "issueType": {
+                "description": "Issue type name, for example Bug, Task or Story.",
+                "type": "string"
+              },
+              "labels": {
+                "description": "Labels to attach.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "priority": {
+                "description": "Priority name such as Highest, High, Medium, Low.",
+                "type": "string"
+              },
+              "project": {
+                "description": "Project key the issue belongs to.",
+                "type": "string"
+              },
+              "summary": {
+                "description": "One line summary of the issue.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "project",
+              "summary",
+              "issueType"
+            ],
+            "type": "object"
+          }
+        },
+        {
+          "name": "update_issue",
+          "description": "Update fields on an existing issue, such as summary, description, labels, priority or custom fields.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "fields": {
+                "description": "Map of field name to new value.",
+                "type": "object"
+              },
+              "issueKey": {
+                "description": "Issue key to update.",
+                "type": "string"
+              },
+              "notify": {
+                "description": "Whether watchers should be notified of the change.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "issueKey",
+              "fields"
+            ],
+            "type": "object"
+          }
+        },
+        {
+          "name": "add_comment",
+          "description": "Add a comment to an issue, optionally restricted to a project role or group.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "body": {
+                "description": "Comment body in wiki markup.",
+                "type": "string"
+              },
+              "issueKey": {
+                "description": "Issue key to comment on.",
+                "type": "string"
+              },
+              "visibility": {
+                "description": "Role or group name the comment is restricted to.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "issueKey",
+              "body"
+            ],
+            "type": "object"
+          }
+        },
+        {
+          "name": "transition_issue",
+          "description": "Move an issue through a workflow transition, optionally setting a resolution.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "comment": {
+                "description": "Comment to add alongside the transition.",
+                "type": "string"
+              },
+              "issueKey": {
+                "description": "Issue key to transition.",
+                "type": "string"
+              },
+              "resolution": {
+                "description": "Resolution to set when the transition closes the issue.",
+                "type": "string"
+              },
+              "transition": {
+                "description": "Transition name or id.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "issueKey",
+              "transition"
+            ],
+            "type": "object"
+          }
+        },
+        {
+          "name": "list_projects",
+          "description": "List all projects visible to the authenticated user, with keys, names and lead.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "expand": {
+                "description": "Entities to expand.",
+                "type": "string"
+              },
+              "maxResults": {
+                "description": "Page size.",
+                "type": "integer"
+              }
+            },
+            "required": null,
+            "type": "object"
+          }
+        },
+        {
+          "name": "list_sprints",
+          "description": "List sprints for a board, including state, start and end dates.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "boardId": {
+                "description": "Numeric board id.",
+                "type": "integer"
+              },
+              "state": {
+                "description": "Filter by sprint state: active, future or closed.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "boardId"
+            ],
+            "type": "object"
+          }
+        },
+        {
+          "name": "get_board",
+          "description": "Fetch a board configuration including columns, filter and estimation settings.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "boardId": {
+                "description": "Numeric board id.",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "boardId"
+            ],
+            "type": "object"
+          }
+        },
+        {
+          "name": "assign_issue",
+          "description": "Assign an issue to a user, or unassign it by passing an empty account id.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "accountId": {
+                "description": "Account id of the new assignee, empty to unassign.",
+                "type": "string"
+              },
+              "issueKey": {
+                "description": "Issue key to assign.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "issueKey"
+            ],
+            "type": "object"
+          }
+        },
+        {
+          "name": "link_issues",
+          "description": "Create a link between two issues, such as blocks, relates to or duplicates.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "comment": {
+                "description": "Comment to attach to the link.",
+                "type": "string"
+              },
+              "inwardIssue": {
+                "description": "Key of the inward issue.",
+                "type": "string"
+              },
+              "linkType": {
+                "description": "Link type name.",
+                "type": "string"
+              },
+              "outwardIssue": {
+                "description": "Key of the outward issue.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "inwardIssue",
+              "outwardIssue",
+              "linkType"
+            ],
+            "type": "object"
+          }
+        },
+        {
+          "name": "search_users",
+          "description": "Search users by display name or email and return account ids.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "maxResults": {
+                "description": "Page size.",
+                "type": "integer"
+              },
+              "query": {
+                "description": "Partial display name or email.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "query"
+            ],
+            "type": "object"
+          }
+        }
+      ]
+    },
+    "postgres": {
+      "tools": [
+        {
+          "name": "query",
+          "description": "Run a read-only SQL query and return rows as JSON. Statements that write are rejected.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "limit": {
+                "description": "Maximum rows to return.",
+                "type": "integer"
+              },
+              "params": {
+                "description": "Positional query parameters.",
+                "items": {},
+                "type": "array"
+              },
+              "sql": {
+                "description": "SELECT statement to execute.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "sql"
+            ],
+            "type": "object"
+          }
+        },
+        {
+          "name": "explain",
+          "description": "Return the query plan for a statement without executing it.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "analyze": {
+                "description": "Run EXPLAIN ANALYZE instead of a plain plan.",
+                "type": "boolean"
+              },
+              "sql": {
+                "description": "Statement to explain.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "sql"
+            ],
+            "type": "object"
+          }
+        },
+        {
+          "name": "list_tables",
+          "description": "List tables in a schema with row estimates and sizes.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "schema": {
+                "description": "Schema name, defaults to public.",
+                "type": "string"
+              }
+            },
+            "required": null,
+            "type": "object"
+          }
+        },
+        {
+          "name": "describe_table",
+          "description": "Describe a table's columns, types, defaults, indexes and constraints.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "schema": {
+                "description": "Schema name.",
+                "type": "string"
+              },
+              "table": {
+                "description": "Table name.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "table"
+            ],
+            "type": "object"
+          }
+        },
+        {
+          "name": "list_indexes",
+          "description": "List indexes on a table with definitions and sizes.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "schema": {
+                "description": "Schema name.",
+                "type": "string"
+              },
+              "table": {
+                "description": "Table name.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "table"
+            ],
+            "type": "object"
+          }
+        },
+        {
+          "name": "list_migrations",
+          "description": "List applied migrations with versions and timestamps.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "limit": {
+                "description": "Maximum migrations to return.",
+                "type": "integer"
+              }
+            },
+            "required": null,
+            "type": "object"
+          }
+        }
+      ]
+    },
+    "sentry": {
+      "tools": [
+        {
+          "name": "list_issues",
+          "description": "List unresolved issues for a project, ordered by event count or last seen.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "project": {
+                "description": "Project slug.",
+                "type": "string"
+              },
+              "query": {
+                "description": "Sentry search query.",
+                "type": "string"
+              },
+              "statsPeriod": {
+                "description": "Stats period such as 24h or 14d.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "project"
+            ],
+            "type": "object"
+          }
+        },
+        {
+          "name": "get_issue",
+          "description": "Fetch one issue with its culprit, metadata and event counts.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "issueId": {
+                "description": "Numeric issue id.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "issueId"
+            ],
+            "type": "object"
+          }
+        },
+        {
+          "name": "get_latest_event",
+          "description": "Fetch the most recent event for an issue including the full stack trace.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "issueId": {
+                "description": "Numeric issue id.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "issueId"
+            ],
+            "type": "object"
+          }
+        },
+        {
+          "name": "resolve_issue",
+          "description": "Mark an issue resolved, optionally in the next release.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "inRelease": {
+                "description": "Release version that resolves the issue.",
+                "type": "string"
+              },
+              "issueId": {
+                "description": "Numeric issue id.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "issueId"
+            ],
+            "type": "object"
+          }
+        },
+        {
+          "name": "list_releases",
+          "description": "List releases with commit counts and deploy status.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "perPage": {
+                "description": "Results per page.",
+                "type": "integer"
+              },
+              "project": {
+                "description": "Project slug.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "project"
+            ],
+            "type": "object"
+          }
+        }
+      ]
+    },
+    "slack": {
+      "tools": [
+        {
+          "name": "post_message",
+          "description": "Post a message to a channel, optionally in a thread.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "channel": {
+                "description": "Channel id or name.",
+                "type": "string"
+              },
+              "text": {
+                "description": "Message text in mrkdwn.",
+                "type": "string"
+              },
+              "threadTs": {
+                "description": "Timestamp of the parent message to reply to.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "channel",
+              "text"
+            ],
+            "type": "object"
+          }
+        },
+        {
+          "name": "list_channels",
+          "description": "List channels the bot can see, with member counts and topics.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "limit": {
+                "description": "Page size.",
+                "type": "integer"
+              },
+              "types": {
+                "description": "Comma separated channel types.",
+                "type": "string"
+              }
+            },
+            "required": null,
+            "type": "object"
+          }
+        },
+        {
+          "name": "search_messages",
+          "description": "Search messages across channels with Slack search syntax.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "count": {
+                "description": "Results per page.",
+                "type": "integer"
+              },
+              "query": {
+                "description": "Search query.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "query"
+            ],
+            "type": "object"
+          }
+        },
+        {
+          "name": "get_thread",
+          "description": "Fetch every reply in a thread.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "channel": {
+                "description": "Channel id.",
+                "type": "string"
+              },
+              "threadTs": {
+                "description": "Parent message timestamp.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "channel",
+              "threadTs"
+            ],
+            "type": "object"
+          }
+        },
+        {
+          "name": "upload_file",
+          "description": "Upload a file or snippet to a channel.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "channel": {
+                "description": "Channel id.",
+                "type": "string"
+              },
+              "content": {
+                "description": "File contents.",
+                "type": "string"
+              },
+              "filename": {
+                "description": "File name.",
+                "type": "string"
+              },
+              "filetype": {
+                "description": "Syntax type for snippets.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "channel",
+              "content"
+            ],
+            "type": "object"
+          }
+        }
+      ]
+    }
+  }
+}

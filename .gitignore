@@ -1,0 +1,82 @@
+# Build output
+/bin/
+/dist/
+# The binary, if someone builds it in place with `go build .`
+/aiprobe
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test, benchmark and profiling output
+*.test
+*.out
+coverage.out
+coverage.html
+*.prof
+cpu.prof
+mem.prof
+/testdata/tmp/
+
+# Reports AIProbe writes into the working directory. These are per-run output, not
+# source, and they contain file paths and excerpts from whatever session produced
+# them — so they must never be committed by accident.
+aiprobe-report.html
+aiprobe-overview.html
+aiprobe-demo.html
+*.aiprobe.json
+
+# Local scratch space. Anything here is a working note, not a deliverable.
+/tmp/
+/scratch/
+# Source material and reading notes that informed the design but are not part of it.
+# Nothing in the repository links here, so publishing it would only add clutter for a
+# first-time reader. Delete the directory if you would rather it were gone entirely.
+/ref/
+
+# Browser-automation artefacts from local UI checks
+.playwright-mcp/
+/playwright-report/
+/test-results/
+
+# Go workspace files are per-developer, and committing one breaks everyone else's
+# build by pointing at directories that only exist on one machine.
+go.work
+go.work.sum
+
+# Dependency vendoring is not used; if someone runs `go mod vendor` locally, that is
+# their business and not the repository's.
+/vendor/
+
+# Environment and credentials. AIProbe needs no API key, but a contributor's shell
+# may still have one lying around.
+.env
+.env.*
+*.pem
+*.key
+
+# Editors and IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.\#*
+\#*\#
+
+# macOS, Windows, Linux desktop droppings
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+Thumbs.db
+Desktop.ini
+.directory
+
+# Agent working directories. AIProbe reads these formats but a checkout of the
+# project should never contain one.
+.claude/
+.kiro/
+.codex/
+.aiprobe/

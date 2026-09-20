@@ -1,0 +1,19 @@
+version: 2
+updates:
+  # The dependency surface is deliberately tiny (cobra and nothing else), so this
+  # is cheap to keep current and worth doing for a tool people run against their
+  # own source code.
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "ci"

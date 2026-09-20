@@ -1,0 +1,845 @@
+<!DOCTYPE html>
+<html lang="{{.Lang}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="aiprobe {{.Result.Meta.ToolVersion}}">
+<meta name="robots" content="noindex, nofollow">
+<title>{{.Title}}</title>
+<style>{{.CSS}}</style>
+<script>{{.ThemeJS}}</script>
+</head>
+<body>
+<div class="wrap">
+{{.ThemeToggle}}
+
+{{- $r := .Result }}
+{{- $h := $r.Headline }}
+
+{{/* Navigation comes before the masthead deliberately. A report is long, and its
+     masthead alone is most of a screen; a nav bar underneath it is below the fold
+     on the page where the reader most wants out. */}}
+{{- if or .Nav .Locales}}
+<nav class="sitenav top" aria-label="{{T "app.name"}}">
+  {{- if .Nav}}
+  <div class="sitenav-links">
+    {{- range .Nav}}
+    <a class="navlink{{if .Current}} on{{end}}{{if .Back}} back{{end}}" href="{{.Href}}"{{if .Current}} aria-current="page"{{end}}>{{.Label}}</a>
+    {{- end}}
+  </div>
+  {{- end}}
+  {{- if .Locales}}
+  <div class="sitenav-lang">
+    <span class="langbar-label">{{T "serve.language"}}</span>
+    {{- range .Locales}}
+    <a class="lang{{if .Selected}} on{{end}}" href="{{.Href}}"{{if .Selected}} aria-current="true"{{end}}>{{.Name}}</a>
+    {{- end}}
+  </div>
+  {{- end}}
+</nav>
+{{- end}}
+
+<header class="masthead">
+  <div>
+    <div class="brand">AI<span>Probe</span></div>
+    <p class="tagline">{{T "app.tagline"}}</p>
+    <dl class="meta-grid">
+      <dt>{{T "meta.session"}}</dt><dd>{{$r.Meta.SessionID}}{{if $r.Meta.Demo}} <span class="tag warn">{{T "meta.demo"}}</span>{{end}}</dd>
+      <dt>{{T "meta.model"}}</dt><dd>{{if $r.Meta.PrimaryModel}}{{shortmodel $r.Meta.PrimaryModel}}{{else}}{{T "value.unknown"}}{{end}}</dd>
+      <dt>{{T "meta.activity"}}</dt><dd>{{Targs "meta.activity.value" "requests" $r.Meta.Requests "tools" $r.Meta.ToolCalls "duration" (dur $r.Meta.DurationSecs)}}</dd>
+      {{- if $r.Meta.CWD}}<dt>{{T "meta.project"}}</dt><dd>{{$r.Meta.CWD}}{{if $r.Meta.GitBranch}} ({{$r.Meta.GitBranch}}){{end}}</dd>{{end}}
+      <dt>{{T "meta.source"}}</dt><dd>{{$r.Meta.SourcePath}}</dd>
+      <dt>{{T "meta.agent"}}</dt><dd>{{$r.Meta.Adapter}}{{if $r.Meta.AgentVersion}} {{$r.Meta.AgentVersion}}{{end}}</dd>
+      <dt>{{T "meta.generated"}}</dt><dd>{{.Generated}} · aiprobe {{$r.Meta.ToolVersion}}</dd>
+    </dl>
+  </div>
+
+  <div class="score-card">
+    {{.Donut}}
+    <div class="headline">
+      <table>
+        <tbody>
+          <tr>
+            <td class="label">{{T "headline.mcp"}}</td>
+            <td class="num">{{opt $h.MCPContextWaste}}</td>
+            <td class="share">{{if $h.MCPContextWaste.Known}}{{if $h.TotalContextTokens}}{{pctr (divf $h.MCPContextWaste.Value $h.TotalContextTokens)}}{{end}}{{end}}</td>
+          </tr>
+          <tr>
+            <td class="label">{{T "headline.cache"}}</td>
+            <td class="num">{{if $h.CacheMissWaste.Known}}{{int $h.CacheMissWaste.Value}}{{else}}<span class="unknown">{{T "value.unknown"}}</span>{{end}}</td>
+            <td class="share">{{if $h.CacheMissWaste.Known}}{{if $h.TotalContextTokens}}{{pctr (divf $h.CacheMissWaste.Value $h.TotalContextTokens)}}{{end}}{{end}}</td>
+          </tr>
+          <tr>
+            <td class="label">{{T "headline.duplicate"}}</td>
+            <td class="num">~{{int $h.DuplicateContext}}</td>
+            <td class="share">{{if $h.TotalContextTokens}}{{pctr (divf $h.DuplicateContext $h.TotalContextTokens)}}{{end}}</td>
+          </tr>
+          <tr class="total">
+            <td class="label">{{T "headline.saving"}}</td>
+            <td class="num">~{{int $h.PotentialSaving}}</td>
+            <td class="share">{{pctr $h.PotentialSavingRatio}}</td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="caption">
+        {{- Targs "headline.of" "total" (int $h.TotalContextTokens) "label" (pick $h.TotalIsMeasured (T "headline.billed") (T "headline.exposure"))}}
+        {{- if $h.CostUnit}} {{Targs "headline.credits" "amount" (printf "%.2f" $h.CostAmount) "unit" $h.CostUnit}}{{end}}
+      </p>
+      {{- with $r.Spend}}{{if .Known}}
+      <div class="money">
+        <div class="money-figure">
+          <span class="money-label">{{T "headline.spent"}}</span>
+          <strong class="money-value">{{money .Total}}</strong>
+        </div>
+        {{- if and .Recoverable.Known .Recoverable.Total}}
+        <div class="money-figure saving">
+          <span class="money-label">{{T "headline.saveable"}}</span>
+          <strong class="money-value">{{money .Recoverable}}</strong>
+        </div>
+        {{- end}}
+      </div>
+      {{- else if .Ceiling.Known}}
+      <div class="money">
+        <div class="money-figure">
+          <span class="money-label">{{T "headline.ceiling"}}</span>
+          <strong class="money-value">{{money .Ceiling}}</strong>
+        </div>
+      </div>
+      {{- end}}{{end}}
+      <ul class="caveats">
+        {{- if not $h.TotalIsMeasured}}<li>{{T "caveat.no_tokens"}}</li>{{end}}
+        {{- if not $h.MCPContextWaste.Known}}<li>{{T "caveat.mcp_unknown"}}</li>{{end}}
+        {{- if not $h.CacheMissWaste.Known}}<li>{{T "caveat.cache_unknown"}}</li>{{end}}
+        {{- if lt $h.ScoreComponentsKnown $h.ScoreComponents}}
+        <li>{{Targs "caveat.coverage" "known" $h.ScoreComponentsKnown "total" $h.ScoreComponents}}</li>
+        {{- end}}
+        <li>{{T "caveat.overlap"}}</li>
+      </ul>
+    </div>
+  </div>
+</header>
+
+<nav class="tabs" role="tablist" aria-label="{{T "tab.sections"}}">
+  <button class="tab" role="tab" data-target="panel-breakdown" aria-selected="true" aria-controls="panel-breakdown">{{T "tab.breakdown"}}</button>
+  <button class="tab" role="tab" data-target="panel-findings" aria-controls="panel-findings">{{T "tab.findings"}}<span class="count">{{len $r.Recommendations}}</span></button>
+  <button class="tab" role="tab" data-target="panel-cache" aria-controls="panel-cache">{{T "tab.cache"}}</button>
+  <button class="tab" role="tab" data-target="panel-mcp" aria-controls="panel-mcp">{{T "tab.mcp"}}</button>
+  <button class="tab" role="tab" data-target="panel-dup" aria-controls="panel-dup">{{T "tab.dup"}}</button>
+  {{- if $r.Spend}}<button class="tab" role="tab" data-target="panel-spend" aria-controls="panel-spend">{{T "tab.spend"}}</button>{{end}}
+  <button class="tab" role="tab" data-target="panel-score" aria-controls="panel-score">{{T "tab.score"}}</button>
+  <button class="tab" role="tab" data-target="panel-method" aria-controls="panel-method">{{T "tab.method"}}</button>
+  {{- if .HasJSON}}<button class="tab" role="tab" data-target="panel-json" aria-controls="panel-json">{{T "tab.json"}}</button>{{end}}
+</nav>
+
+{{/* ---------------- breakdown ---------------- */}}
+<section class="panel active" id="panel-breakdown" role="tabpanel" aria-label="{{T "tab.breakdown"}}">
+  {{- $b := $r.Breakdown }}
+  <div class="card">
+    <h2>{{T "section.breakdown"}}</h2>
+    {{- if $b.ProviderTotalAvailable}}
+    <p class="sub">{{T "breakdown.intro"}}</p>
+    {{- else}}
+    <p class="sub">{{T "breakdown.intro.estimated"}}</p>
+    {{- end}}
+
+    <div class="stat-row">
+      <div class="stat">
+        <div class="k">{{if $b.ProviderTotalAvailable}}{{T "breakdown.stat.billed"}}{{else}}{{T "breakdown.stat.exposure"}}{{end}}</div>
+        <div class="v">{{amount $b.TotalBilledInput}}</div>
+        <div class="n">{{grade $b.TotalBilledInput}}</div>
+      </div>
+      <div class="stat">
+        <div class="k">{{T "breakdown.stat.output"}}</div>
+        <div class="v">{{if isunknown $b.TotalOutput}}<span class="unknown">{{T "value.unknown"}}</span>{{else}}{{int $b.TotalOutput.Tokens}}{{end}}</div>
+        <div class="n">{{grade $b.TotalOutput}}</div>
+      </div>
+      <div class="stat"><div class="k">{{T "breakdown.stat.requests"}}</div><div class="v">{{$b.Requests}}</div><div class="n">{{T "breakdown.stat.apicalls"}}</div></div>
+      <div class="stat"><div class="k">{{T "breakdown.stat.overhead"}}</div><div class="v warn">{{amount $b.FixedOverheadPerRequest}}</div><div class="n">{{Targs "breakdown.overhead.share" "share" (pctr $b.OverheadShare)}}</div></div>
+      <div class="stat"><div class="k">{{T "breakdown.stat.final"}}</div><div class="v">{{amount $b.VisibleContextFinal}}</div><div class="n">{{grade $b.VisibleContextFinal}}</div></div>
+    </div>
+
+    {{.BreakdownBar}}
+    <div class="legend">
+      {{- range $b.Categories}}{{if .Billed.Tokens}}
+      <span class="item"><span class="swatch" style="background:{{catcolor .Category}}"></span>{{cat .Category}} {{pct .Share}}</span>
+      {{- end}}{{end}}
+    </div>
+
+    <table class="data" style="margin-top:18px">
+      <thead>
+        <tr>
+          <th class="sortable">{{T "breakdown.col.category"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "breakdown.col.billed"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "breakdown.col.share"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "breakdown.col.inserted"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "breakdown.col.items"}}</th>
+          <th class="sortable">{{T "breakdown.col.method"}}</th>
+          <th>{{T "breakdown.col.note"}}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{- range $b.Categories}}
+        <tr>
+          <td><span class="swatch" style="display:inline-block;width:9px;height:9px;border-radius:3px;background:{{catcolor .Category}};margin-right:7px"></span>{{cat .Category}}</td>
+          <td class="num" data-sort="{{.Billed.Tokens}}">{{if isunknown .Billed}}<span class="unknown">{{T "value.unknown"}}</span>{{else}}{{amount .Billed}}{{end}}</td>
+          <td class="num" data-sort="{{.Share}}">{{pct .Share}}</td>
+          <td class="num" data-sort="{{.Inserted.Tokens}}">{{if isunknown .Inserted}}<span class="unknown">{{T "value.unknown"}}</span>{{else}}{{amount .Inserted}}{{end}}</td>
+          <td class="num" data-sort="{{.Items}}">{{.Items}}</td>
+          <td><span class="tag">{{methodName .Billed.Method}}</span></td>
+          <td class="est">{{rownote .}}</td>
+        </tr>
+        {{- end}}
+      </tbody>
+    </table>
+    {{- range notes $b.Notes $b.NoteMsgs}}<p class="note">{{.}}</p>{{end}}
+    {{- if $b.Calibration.Applied}}
+    <p class="note">{{Targs "breakdown.calibration.note" "factor" (printf "%.3f" $b.Calibration.Factor) "samples" $b.Calibration.Samples "method" $b.Calibration.Method}}</p>
+    {{- end}}
+  </div>
+
+  <div class="card">
+    <h2>{{T "tools.title"}}</h2>
+    <p class="sub">{{T "tools.intro"}}</p>
+    {{- if $r.Tools}}
+    <table class="data">
+      <thead>
+        <tr>
+          <th class="sortable">{{T "tools.col.tool"}}</th>
+          <th class="sortable">{{T "tools.col.class"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "tools.col.calls"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "tools.col.result"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "tools.col.largest"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "tools.col.billed"}}</th>
+          <th style="width:120px">&nbsp;</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{- range $r.Tools}}
+        <tr>
+          <td class="mono">{{.Name}}</td>
+          <td class="est">{{toolclass .Class}}</td>
+          <td class="num">{{.Calls}}</td>
+          <td class="num">~{{int .ResultTokens}}</td>
+          <td class="num">~{{int .MaxResultTokens}}</td>
+          <td class="num">~{{int .BilledTokens}}</td>
+          <td class="bar-cell"><div class="bar"><i style="width:{{barwidth .BilledTokens $.MaxToolTokens}};background:{{catcolor .Class.Category}}"></i></div></td>
+        </tr>
+        {{- end}}
+      </tbody>
+    </table>
+    {{- else}}<p class="empty">{{T "tools.none"}}</p>{{end}}
+  </div>
+</section>
+
+{{/* ---------------- findings ---------------- */}}
+<section class="panel" id="panel-findings" role="tabpanel" aria-label="{{T "tab.findings"}}">
+  <div class="card">
+    <h2>{{T "section.findings"}}</h2>
+    <p class="sub">{{T "findings.intro"}}</p>
+    {{- if not $r.Recommendations}}
+    <p class="ok">{{T "findings.none.long"}}</p>
+    {{- end}}
+  </div>
+  {{- range $i, $rec := $r.Recommendations}}
+  <article class="finding {{confclass $rec.Confidence}}">
+    <header>
+      <h3>{{add $i 1}}. {{issue $rec}}</h3>
+      <div class="waste{{if not $rec.WastedTokens.Known}} unknown{{end}}">
+        {{- if $rec.WastedTokens.Known}}{{if $rec.WastedEstimated}}~{{end}}{{int $rec.WastedTokens.Value}} {{T "findings.tokens"}}
+        {{- else}}{{T "findings.waste_unknown"}}{{end}}
+        {{- with $rec.WastedCost}}<span class="waste-cost">{{Targs "spend.finding.worth" "cost" (money .)}}</span>{{end}}
+      </div>
+    </header>
+    <ul>{{range evidence $rec}}<li>{{.}}</li>{{end}}</ul>
+    <p class="fix"><b>{{T "findings.fix"}}</b> {{fix $rec}}</p>
+    {{- with steps $rec}}
+    <div class="steps">
+      <b>{{T "findings.steps"}}</b>
+      <ol>{{range .}}<li>{{.}}</li>{{end}}</ol>
+    </div>
+    {{- end}}
+    {{- with tools $rec}}
+    <div class="tools">
+      <b>{{T "findings.tools"}}</b>
+      <p class="tools-intro">{{T "findings.tools.intro"}}</p>
+      {{- range .}}
+      <div class="tool">
+        <div class="tool-head"><span class="tool-name">{{.Name}}</span> {{.What}}</div>
+        {{- if .Install}}<pre class="tool-install">{{.Install}}</pre>{{end}}
+        {{- if .Verify}}<div class="tool-verify"><b>{{T "findings.tools.verify"}}</b> {{.Verify}}</div>{{end}}
+        {{- if .DocRef}}<div class="tool-doc">{{Targs "findings.tools.docs" "path" .DocRef}}</div>{{end}}
+      </div>
+      {{- end}}
+    </div>
+    {{- end}}
+    <div class="foot">
+      <span>{{Targs "findings.rule" "id" $rec.ID}}</span>
+      <span>{{Targs "findings.area" "area" (area $rec.Area)}}</span>
+      <span>{{Targs "findings.confidence" "level" (conf $rec.Confidence)}}</span>
+      {{- if $rec.WastedEstimated}}<span>{{T "findings.waste_est"}}</span>{{else if $rec.WastedTokens.Known}}<span>{{T "findings.waste_measured"}}</span>{{end}}
+    </div>
+  </article>
+  {{- end}}
+</section>
+
+{{/* ---------------- cache ---------------- */}}
+<section class="panel" id="panel-cache" role="tabpanel" aria-label="{{T "tab.cache"}}">
+  {{- $c := $r.Cache }}
+  <div class="card">
+    <h2>{{T "section.cache"}}</h2>
+    <p class="sub">{{T "cache.intro"}}</p>
+    <div class="stat-row">
+      <div class="stat"><div class="k">{{T "cache.stat.hit"}}</div><div class="v {{if ge $c.HitRatio 0.85}}good{{else if ge $c.HitRatio 0.6}}warn{{else}}bad{{end}}">{{pctr $c.HitRatio}}</div><div class="n">{{T "cache.stat.target"}}</div></div>
+      <div class="stat"><div class="k">{{T "cache.stat.read"}}</div><div class="v good">{{int $c.CacheReadTokens.Tokens}}</div><div class="n">{{T "value.measured"}}</div></div>
+      <div class="stat"><div class="k">{{T "cache.stat.write"}}</div><div class="v">{{int $c.CacheWriteTokens.Tokens}}</div><div class="n">{{T "value.measured"}}</div></div>
+      <div class="stat"><div class="k">{{T "cache.stat.uncached"}}</div><div class="v">{{int $c.UncachedTokens.Tokens}}</div><div class="n">{{T "value.measured"}}</div></div>
+      <div class="stat"><div class="k">{{T "cache.stat.miss"}}</div><div class="v bad">{{int $c.MissedCacheTokens.Tokens}}</div><div class="n">{{T "cache.stat.rebilled"}}</div></div>
+      <div class="stat"><div class="k">{{T "cache.stat.prefix"}}</div><div class="v">{{amount $c.StablePrefixTokens}}</div><div class="n">{{Targs "cache.stat.prefix.note" "events" $c.StablePrefixEvents "share" (pctr $c.StablePrefixRatio)}}</div></div>
+    </div>
+    {{.CacheChart}}
+    <div class="legend">
+      <span class="item"><span class="swatch" style="background:#61afef"></span>{{T "cache.legend.prompt"}}</span>
+      <span class="item"><span class="swatch" style="background:#4ec9a0"></span>{{T "cache.legend.cached"}}</span>
+      <span class="item"><span class="swatch" style="background:#e06c75"></span>{{T "cache.legend.drift"}}</span>
+    </div>
+    <p class="sub" style="margin-top:20px">{{T "cache.hitperturn"}}</p>
+    {{.HitRatioChart}}
+    {{- range notes $c.Notes $c.NoteMsgs}}<p class="note">{{.}}</p>{{end}}
+  </div>
+
+  <div class="card">
+    <h2>{{T "cache.whytitle"}}</h2>
+    <p class="sub">{{T "cache.why.intro"}}</p>
+    {{- if $c.CauseTotals}}
+    <table class="data">
+      <thead>
+        <tr>
+          <th class="sortable">{{T "cache.col.cause"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "cache.col.events"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "cache.col.missed"}}</th>
+          <th style="width:160px">&nbsp;</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{- range $c.CauseTotals}}
+        <tr>
+          <td class="{{causeclass .Cause}}">{{cause .Cause}}</td>
+          <td class="num">{{.Events}}</td>
+          <td class="num">{{int .MissedTokens}}</td>
+          <td class="bar-cell"><div class="bar"><i style="width:{{barwidth .MissedTokens $.MaxCauseTokens}};background:{{if eq (printf "%s" .Cause) "unknown"}}#6b7484{{else}}#e06c75{{end}}"></i></div></td>
+        </tr>
+        {{- end}}
+      </tbody>
+    </table>
+    {{- else}}<p class="ok">{{T "cache.nodrift.long"}}</p>{{end}}
+
+    {{- if $c.DriftEvents}}
+    <table class="data" style="margin-top:20px">
+      <thead>
+        <tr>
+          <th class="sortable" data-numeric="true">{{T "cache.col.turn"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "cache.col.expected"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "cache.col.actual"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "cache.col.miss"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "cache.col.idle"}}</th>
+          <th class="sortable">{{T "cache.col.primary"}}</th>
+          <th>{{T "cache.col.evidence"}}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{- range $c.DriftEvents}}
+        {{- $p := .PrimaryCause}}
+        <tr>
+          <td class="num">{{.Turn}}</td>
+          <td class="num">{{int .ExpectedCacheRead}}</td>
+          <td class="num">{{int .ActualCacheRead}}</td>
+          <td class="num">{{int .MissedTokens}}</td>
+          <td class="num" data-sort="{{.GapSeconds}}">{{gap .GapSeconds}}</td>
+          <td class="{{causeclass $p.Cause}}">{{cause $p.Cause}} <span class="tag {{confclass $p.Confidence}}">{{conf $p.Confidence}}</span></td>
+          <td class="est">{{driftev $p}}</td>
+        </tr>
+        {{- end}}
+      </tbody>
+    </table>
+    {{- end}}
+  </div>
+
+  <div class="card">
+    <h2>{{T "cache.detail"}}</h2>
+    <p class="sub">{{T "cache.detail.intro"}}</p>
+    <table class="data">
+      <thead>
+        <tr>
+          <th class="sortable" data-numeric="true">{{T "cache.col.turn"}}</th>
+          <th class="sortable">{{T "cache.col.time"}}</th>
+          <th class="sortable">{{T "meta.model"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "cache.col.prompt"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "cache.col.cached"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "cache.col.written"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "cache.col.fresh"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "cache.col.hit"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "cache.col.idle"}}</th>
+          <th>{{T "cache.col.drift"}}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{- range $c.Turns}}
+        <tr>
+          <td class="num">{{.Turn}}</td>
+          <td class="est" data-sort="{{.TimestampUnix}}">{{ts .TimestampUnix}}</td>
+          <td class="est">{{shortmodel .Model}}</td>
+          <td class="num">{{int .PromptTokens}}</td>
+          <td class="num">{{int .CacheRead}}</td>
+          <td class="num">{{int .CacheWrite}}</td>
+          <td class="num">{{int .Uncached}}</td>
+          <td class="num" data-sort="{{.HitRatio}}">{{pctr .HitRatio}}</td>
+          <td class="num" data-sort="{{.GapSeconds}}">{{gap .GapSeconds}}</td>
+          <td>{{if .Drifted}}<span class="tag bad">{{T "cache.tag.miss"}}</span>{{else}}<span class="tag good">{{T "cache.tag.ok"}}</span>{{end}}</td>
+        </tr>
+        {{- end}}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+{{/* ---------------- mcp ---------------- */}}
+<section class="panel" id="panel-mcp" role="tabpanel" aria-label="{{T "tab.mcp"}}">
+  {{- $m := $r.MCP }}
+  <div class="card">
+    <h2>{{T "section.mcp"}}</h2>
+    <p class="sub">{{T "mcp.intro"}}</p>
+    {{- if eq $m.ServerCount 0}}
+    <p class="empty">{{T "mcp.none"}}</p>
+    {{- else}}
+    <div class="stat-row">
+      <div class="stat"><div class="k">{{T "mcp.stat.servers"}}</div><div class="v">{{$m.ServerCount}}</div></div>
+      <div class="stat"><div class="k">{{T "mcp.stat.loaded"}}</div><div class="v">{{optplain $m.ToolsLoaded}}</div></div>
+      <div class="stat"><div class="k">{{T "mcp.stat.used"}}</div><div class="v">{{$m.ToolsUsed}}</div><div class="n">{{Targs "mcp.stat.used.note" "calls" $m.Calls}}</div></div>
+      <div class="stat"><div class="k">{{T "mcp.stat.util"}}</div><div class="v {{if $m.Utilization.Known}}{{if ge $m.Utilization.Value 0.5}}good{{else}}bad{{end}}{{end}}">{{optpct $m.Utilization}}</div><div class="n">{{T "mcp.stat.util.note"}}</div></div>
+      <div class="stat"><div class="k">{{T "mcp.stat.schemareq"}}</div><div class="v warn">{{opt $m.SchemaTokensPerRequest}}</div></div>
+      <div class="stat"><div class="k">{{T "mcp.stat.unusedbill"}}</div><div class="v bad">{{opt $m.UnusedTokensBilled}}</div><div class="n">{{Targs "mcp.stat.unused.note" "requests" $r.Meta.Requests}}</div></div>
+    </div>
+
+    <table class="data">
+      <thead>
+        <tr>
+          <th class="sortable">{{T "mcp.col.server"}}</th>
+          <th class="sortable">{{T "mcp.col.source"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "mcp.col.tools"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "mcp.col.used"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "mcp.col.calls"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "mcp.col.schema"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "mcp.col.unused"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "mcp.col.results"}}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{- range $m.Servers}}
+        <tr>
+          <td class="mono">{{.Name}}</td>
+          <td class="est">{{mcpsource .Source}}</td>
+          <td class="num">{{optplain .ToolsLoaded}}</td>
+          <td class="num">{{.ToolsUsed}}</td>
+          <td class="num">{{.Calls}}</td>
+          <td class="num">{{opt .SchemaTokens}}</td>
+          <td class="num">{{opt .UnusedSchemaTokens}}</td>
+          <td class="num">~{{int .ResultTokens}}</td>
+        </tr>
+        {{- end}}
+      </tbody>
+    </table>
+
+    {{- if $m.ConfiguredUnusedServers}}
+    <p class="note">{{T "mcp.configured_unused"}} {{range $i, $s := $m.ConfiguredUnusedServers}}{{if $i}}, {{end}}<code>{{$s}}</code>{{end}}</p>
+    {{- end}}
+
+    <h2 style="margin-top:26px">{{T "mcp.pertool"}}</h2>
+    <p class="sub">{{T "mcp.pertool.intro"}}</p>
+    <table class="data">
+      <thead>
+        <tr>
+          <th class="sortable">{{T "mcp.col.tool"}}</th>
+          <th class="sortable">{{T "mcp.col.server"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "mcp.col.calls"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "mcp.col.schema"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "mcp.col.args"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "mcp.col.results"}}</th>
+          <th class="sortable">{{T "mcp.col.used"}}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{- range $s := $m.Servers}}{{range $s.Tools}}
+        <tr>
+          <td class="mono">{{.Tool}}</td>
+          <td class="est">{{.Server}}</td>
+          <td class="num">{{.Calls}}</td>
+          <td class="num">{{opt .SchemaTokens}}</td>
+          <td class="num">~{{int .ArgTokens}}</td>
+          <td class="num">~{{int .ResultTokens}}</td>
+          <td>{{if .Used}}<span class="tag good">{{T "mcp.used.tag"}}</span>{{else}}<span class="tag bad">{{T "mcp.never.tag"}}</span>{{end}}</td>
+        </tr>
+        {{- end}}{{end}}
+      </tbody>
+    </table>
+    {{- end}}
+    {{- range notes $m.Notes $m.NoteMsgs}}<p class="note">{{.}}</p>{{end}}
+    {{- if $m.InventorySources}}
+    <p class="note">{{T "mcp.inventory_sources"}} {{range $i, $s := $m.InventorySources}}{{if $i}}, {{end}}<code>{{$s}}</code>{{end}}</p>
+    {{- end}}
+  </div>
+</section>
+
+{{/* ---------------- duplicates ---------------- */}}
+<section class="panel" id="panel-dup" role="tabpanel" aria-label="{{T "tab.dup"}}">
+  {{- $d := $r.Duplicates }}
+  <div class="card">
+    <h2>{{T "section.dup"}}</h2>
+    <p class="sub">{{Targs "dup.intro" "threshold" (pctr $d.Options.Similarity)}}</p>
+    <div class="stat-row">
+      <div class="stat"><div class="k">{{T "dup.stat.uniqueness"}}</div><div class="v {{if ge $d.UniquenessRatio 0.9}}good{{else if ge $d.UniquenessRatio 0.75}}warn{{else}}bad{{end}}">{{pctr $d.UniquenessRatio}}</div><div class="n">{{T "dup.unique_of"}}</div></div>
+      <div class="stat"><div class="k">{{T "dup.stat.redundant"}}</div><div class="v">{{amount $d.TotalInsertWaste}}</div><div class="n">{{T "dup.oneoff"}}</div></div>
+      <div class="stat"><div class="k">{{T "dup.stat.rebilled"}}</div><div class="v bad">{{amount $d.TotalBilledWaste}}</div><div class="n">{{T "dup.carried"}}</div></div>
+      <div class="stat"><div class="k">{{T "dup.stat.total"}}</div><div class="v">~{{int $d.ToolOutputTokens}}</div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>{{T "dup.files"}}</h2>
+    {{- if $d.FileRepeats}}
+    <table class="data">
+      <thead>
+        <tr>
+          <th class="sortable">{{T "dup.col.file"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "dup.col.reads"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "dup.col.identical"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "dup.col.range"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "dup.col.perread"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "dup.col.rebilled"}}</th>
+          <th class="sortable">{{T "dup.col.turns"}}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{- range $d.FileRepeats}}
+        <tr>
+          <td class="mono">{{.Path}}</td>
+          <td class="num">{{.Reads}}</td>
+          <td class="num">{{.IdenticalReads}}</td>
+          <td class="num">{{.RangeReads}}</td>
+          <td class="num">~{{int .TokensPerRead}}</td>
+          <td class="num">{{amount .BilledWaste}}</td>
+          <td class="est">{{.FirstTurn}}→{{.LastTurn}}{{if .ContentChanged}} · {{T "dup.content_changed"}}{{end}}</td>
+        </tr>
+        {{- end}}
+      </tbody>
+    </table>
+    {{- else}}<p class="ok">{{T "dup.none.files"}}</p>{{end}}
+  </div>
+
+  <div class="card">
+    <h2>{{T "dup.commands"}}</h2>
+    {{- if $d.CommandRepeats}}
+    <table class="data">
+      <thead>
+        <tr>
+          <th class="sortable">{{T "dup.col.command"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "dup.col.runs"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "dup.col.identical"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "dup.col.perrun"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "dup.col.rebilled"}}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{- range $d.CommandRepeats}}
+        <tr>
+          <td class="mono">{{.Command}}</td>
+          <td class="num">{{.Runs}}</td>
+          <td class="num">{{.IdenticalOutputs}}</td>
+          <td class="num">~{{int .TokensPerRun}}</td>
+          <td class="num">{{amount .BilledWaste}}</td>
+        </tr>
+        {{- end}}
+      </tbody>
+    </table>
+    {{- else}}<p class="ok">{{T "dup.none.commands"}}</p>{{end}}
+  </div>
+
+  <div class="card">
+    <h2>{{T "dup.results"}}</h2>
+    {{- if $d.ResultRepeats}}
+    <table class="data">
+      <thead>
+        <tr>
+          <th class="sortable">{{T "dup.col.subject"}}</th>
+          <th class="sortable">{{T "mcp.col.tool"}}</th>
+          <th class="sortable">{{T "dup.col.kind"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "dup.col.occurrences"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "dup.col.similarity"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "dup.col.each"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "dup.col.rebilled"}}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{- range $d.ResultRepeats}}
+        <tr>
+          <td class="mono">{{subject .Subject .ToolName}}<div class="est">{{Targs "dup.fingerprint" "fp" .Fingerprint "lines" .Lines}}</div></td>
+          <td class="est">{{.ToolName}}</td>
+          <td>{{if eq .Kind "exact"}}<span class="tag bad">{{T "dup.kind.exact"}}</span>{{else}}<span class="tag warn">{{T "dup.kind.near"}}</span>{{end}}</td>
+          <td class="num">{{.Occurrences}}</td>
+          <td class="num" data-sort="{{.Similarity}}">{{pctr .Similarity}}</td>
+          <td class="num">~{{int .TokensEach}}</td>
+          <td class="num">{{amount .BilledWaste}}</td>
+        </tr>
+        {{- end}}
+      </tbody>
+    </table>
+    {{- else}}<p class="ok">{{T "dup.none.results"}}</p>{{end}}
+  </div>
+
+  {{- if $d.BlockRepeats}}
+  <div class="card">
+    <h2>{{T "dup.passages"}}</h2>
+    <p class="sub">{{T "dup.passages.intro"}}</p>
+    <table class="data">
+      <thead>
+        <tr>
+          <th class="sortable" data-numeric="true">{{T "dup.col.occurrences"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "findings.tokens"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "dup.col.lines"}}</th>
+          <th class="sortable">{{T "dup.col.appears"}}</th>
+          <th>{{T "dup.col.fingerprint"}}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{- range $d.BlockRepeats}}
+        <tr>
+          <td class="num">{{.Occurrences}}</td>
+          <td class="num">~{{int .Tokens}}</td>
+          <td class="num">{{.Lines}}</td>
+          <td class="est">{{range $i, $c := .Contexts}}{{if $i}}, {{end}}{{clip $c 40}}{{end}}</td>
+          <td class="est mono">{{.Fingerprint}}</td>
+        </tr>
+        {{- end}}
+      </tbody>
+    </table>
+  </div>
+  {{- end}}
+  {{- range notes $d.Notes $d.NoteMsgs}}<p class="note">{{.}}</p>{{end}}
+</section>
+
+{{/* ---------------- spend ---------------- */}}
+{{- with $sp := $r.Spend}}
+<section class="panel" id="panel-spend" role="tabpanel" aria-label="{{T "tab.spend"}}">
+  <div class="card">
+    <h2>{{T "spend.title"}}</h2>
+    {{- if .ConfigError}}
+    <p class="note warn">{{Targs "spend.config.broken" "error" .ConfigError}}</p>
+    {{- end}}
+    {{- if .Known}}
+    <p class="sub">{{if .Modelled}}{{T "spend.intro.modelled"}}{{else}}{{T "spend.intro"}}{{end}}</p>
+
+    <div class="money wide">
+      <div class="money-figure">
+        <span class="money-label">{{T "spend.total"}}</span>
+        <strong class="money-value">{{money .Total}}</strong>
+      </div>
+      <div class="money-figure saving">
+        <span class="money-label">{{T "spend.recoverable"}}</span>
+        <strong class="money-value">{{money .Recoverable}}</strong>
+        {{- if .RecoverableRatio}}<span class="money-sub">{{Targs "spend.recoverable.of" "ratio" (pctr .RecoverableRatio)}}</span>{{end}}
+      </div>
+    </div>
+
+    {{/* Two tables, not one. The middle column means tokens for a billing class
+         and requests for a model, and sharing a header made "165 requests" out of
+         165 uncached input tokens. */}}
+    <table class="data spend-table">
+      <thead>
+        <tr>
+          <th>{{T "spend.col.class"}}</th>
+          <th class="num">{{T "spend.col.tokens"}}</th>
+          <th class="num">{{T "spend.col.cost"}}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{- range $c := spendclasses $sp}}
+        <tr class="class-row">
+          <td class="label">{{$c.Label}}</td>
+          <td class="num">{{int $c.Tokens}}</td>
+          <td class="num">{{money2 $c.Cost $sp.Currency}}</td>
+        </tr>
+        {{- end}}
+      </tbody>
+    </table>
+
+    <table class="data spend-table">
+      <thead>
+        <tr>
+          <th>{{T "spend.col.model"}}</th>
+          <th class="num">{{T "spend.col.requests"}}</th>
+          <th class="num">{{T "spend.col.cost"}}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{- range .ByModel}}
+        <tr>
+          <td><code>{{shortmodel .Model}}</code></td>
+          <td class="num">{{.Requests}}</td>
+          <td class="num">{{if .Priced}}{{money2 .Cost.Total $sp.Currency}}{{else}}<span class="unknown">{{T "value.unknown"}}</span>{{end}}</td>
+        </tr>
+        {{- if .Priced}}
+        <tr class="rate-row">
+          <td colspan="3" class="rates">
+            {{T "spend.col.input"}} {{rate .Price.Input $sp.Currency}} ·
+            {{T "spend.col.output"}} {{rate .Price.Output $sp.Currency}}
+            {{- if .Price.CacheWrite}} · {{T "spend.col.cache_write"}} {{rate .Price.CacheWrite $sp.Currency}}{{end}}
+            {{- if .Price.CacheRead}} · {{T "spend.col.cache_read"}} {{rate .Price.CacheRead $sp.Currency}}{{end}}
+          </td>
+        </tr>
+        {{- end}}
+        {{- end}}
+      </tbody>
+    </table>
+
+    <p class="note">{{spendsource $sp}}</p>
+    {{- if .Recoverable.Estimated}}<p class="note">{{T "spend.estimated"}}</p>{{end}}
+    {{- if .Partial}}<p class="note warn">{{T "spend.partial"}}</p>{{end}}
+    {{- if .UnpricedModels}}<p class="note warn">{{Targs "spend.unpriced" "models" (shortmodels .UnpricedModels)}}</p>{{end}}
+    {{- if .Approximate}}
+    <p class="note warn">{{Targs "spend.approximate"
+        "models" (shortmodels .ApproximatedModels)
+        "rate" (rate .FallbackRate $sp.Currency)}}</p>
+    {{- end}}
+    {{- if and .Modelled .Ceiling.Known}}
+    <p class="note">{{Targs "spend.modelled.floor" "ceiling" (money .Ceiling)}}</p>
+    {{- end}}
+    {{- if .CreditUnit}}
+    <p class="note">{{Targs "spend.credits.short" "amount" (printf "%.2f" .CreditAmount) "unit" .CreditUnit}}</p>
+    {{- end}}
+    {{- else}}
+    {{- if .Ceiling.Known}}
+    <div class="money wide">
+      <div class="money-figure">
+        <span class="money-label">{{T "spend.ceiling"}}</span>
+        <strong class="money-value">{{money .Ceiling}}</strong>
+      </div>
+    </div>
+    <p class="note">{{ceilingbasis $sp}}</p>
+    {{- else}}
+    <p class="sub">{{T "spend.unknown"}}</p>
+    {{- end}}
+    <p class="note">{{spendreason $sp}}</p>
+    {{- end}}
+  </div>
+</section>
+{{- end}}
+
+{{/* ---------------- score ---------------- */}}
+<section class="panel" id="panel-score" role="tabpanel" aria-label="{{T "tab.score"}}">
+  {{- $s := $r.Score }}
+  <div class="card">
+    <h2>{{T "section.score"}} · {{if $s.KnownWeight}}{{$s.Value}}/100 · {{$s.Grade}}{{else}}{{T "value.notapplicable"}}{{end}}</h2>
+    <p class="sub">{{Targs "score.intro" "doc" $s.DocRef}}</p>
+    <table class="data">
+      <thead>
+        <tr>
+          <th class="sortable">{{T "score.col.component"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "score.col.weight"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "score.col.effective"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "score.col.sub"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "score.col.points"}}</th>
+          <th style="width:140px">&nbsp;</th>
+          <th>{{T "score.col.detail"}}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{- range $s.Components}}
+        <tr>
+          <td>{{comp .Key}}<div class="est mono">{{.Formula}}</div></td>
+          <td class="num">{{printf "%.0f" .Weight}}</td>
+          <td class="num">{{if .Score.Known}}{{printf "%.1f" .EffectiveWeight}}{{else}}<span class="unknown">{{T "value.na"}}</span>{{end}}</td>
+          <td class="num" data-sort="{{if .Score.Known}}{{.Score.Value}}{{else}}-1{{end}}">{{if .Score.Known}}{{pctr .Score.Value}}{{else}}<span class="unknown">{{T "value.unknown"}}</span>{{end}}</td>
+          <td class="num">{{if .Score.Known}}{{printf "%.1f" .Points}}{{else}}-{{end}}</td>
+          <td class="bar-cell">{{if .Score.Known}}<div class="bar"><i style="width:{{widthpct .Score.Value}};background:{{scorecolor (mulint .Score.Value 100)}}"></i></div>{{end}}</td>
+          <td class="est">{{if .Score.Known}}{{.Detail}}{{else}}{{.Reason}}{{end}}</td>
+        </tr>
+        {{- end}}
+      </tbody>
+    </table>
+    {{- range notes $s.Notes $s.NoteMsgs}}<p class="note">{{.}}</p>{{end}}
+  </div>
+</section>
+
+{{/* ---------------- method ---------------- */}}
+<section class="panel" id="panel-method" role="tabpanel" aria-label="{{T "tab.method"}}">
+  <div class="card">
+    <h2>{{T "method.title"}}</h2>
+    <p class="sub">{{T "method.intro"}}</p>
+    <table class="data">
+      <thead><tr><th>{{T "method.col.value"}}</th><th>{{T "method.col.provenance"}}</th></tr></thead>
+      <tbody>
+        <tr><td>{{T "method.row.measured"}}</td><td>{{T "method.row.measured.d"}}</td></tr>
+        <tr><td>{{T "method.row.category"}}</td><td>{{T "method.row.category.d"}}</td></tr>
+        <tr><td>{{T "method.row.system"}}</td><td>{{T "method.row.system.d"}}</td></tr>
+        <tr><td>{{T "method.row.mcp"}}</td><td>{{T "method.row.mcp.d"}}</td></tr>
+        <tr><td>{{T "method.row.dup"}}</td><td>{{T "method.row.dup.d"}}</td></tr>
+        <tr><td>{{T "method.row.drift"}}</td><td>{{T "method.row.drift.d"}}</td></tr>
+        <tr><td>{{T "method.row.score"}}</td><td>{{T "method.row.score.d"}}</td></tr>
+      </tbody>
+    </table>
+    <p class="note">{{T "method.marker"}}</p>
+    {{- with $r.Meta.Consistency}}
+    <h2 style="margin-top:22px">{{T "crosscheck.title"}}</h2>
+    <p class="sub">{{T "crosscheck.intro"}}</p>
+    <table class="data">
+      <tbody>
+        <tr><td>{{T "crosscheck.against"}}</td><td>{{.Source}}</td></tr>
+        <tr><td>{{T "crosscheck.samples"}}</td><td class="num">{{.Samples}}</td></tr>
+        <tr><td>{{T "crosscheck.tracking"}}</td><td class="num">{{Targs "crosscheck.spread" "value" (printf "%.2f" .Tracking)}}</td></tr>
+        {{- if .ImpliedWindowTokens}}<tr><td>{{T "crosscheck.window"}}</td><td class="num">{{int .ImpliedWindowTokens}} {{T "findings.tokens"}}</td></tr>{{end}}
+        <tr><td>{{T "crosscheck.verdict"}}</td><td>{{if .Trustworthy}}<span class="tag good">{{T "crosscheck.ok"}}</span>{{else}}<span class="tag bad">{{T "crosscheck.bad"}}</span>{{end}} {{verdict .}}</td></tr>
+      </tbody>
+    </table>
+    {{- end}}
+    {{- if $r.Meta.RequestsInferred}}
+    <p class="note">{{T "crosscheck.requests_inferred"}}</p>
+    {{- end}}
+  </div>
+  <div class="card">
+    <h2>{{T "privacy.title"}}</h2>
+    <p class="sub">{{T "privacy.intro"}}</p>
+    <ul>
+      <li>{{T "privacy.1"}}</li>
+      <li>{{T "privacy.2"}}</li>
+      <li>{{T "privacy.3"}}</li>
+      <li>{{T "privacy.4"}}</li>
+    </ul>
+    {{- if $r.Meta.Warnings}}
+    <h2 style="margin-top:22px">{{T "privacy.warnings"}}</h2>
+    <ul>{{range $r.Meta.Warnings}}<li class="est">{{.}}</li>{{end}}</ul>
+    {{- end}}
+  </div>
+</section>
+
+{{- if .HasJSON}}
+<section class="panel" id="panel-json" role="tabpanel" aria-label="{{T "tab.json"}}">
+  <div class="card">
+    <h2>{{T "json.title"}}</h2>
+    <p class="sub">{{T "json.intro"}} {{Targs "json.schema" "schema" (printf "%s / %s" .Result.Meta.Tool $r.Meta.ToolVersion)}}</p>
+    <div class="copy-row">
+      <button class="btn" id="copy-json" type="button">{{T "json.copy"}}</button>
+      <span class="est">{{T "json.local"}}</span>
+    </div>
+    <pre class="json" id="report-json">{{.JSONText}}</pre>
+  </div>
+</section>
+{{- end}}
+
+<footer class="foot">
+  <p><b>{{T "app.name"}} {{$r.Meta.ToolVersion}}</b> · {{Targs "footer.line" "adapter" $r.Meta.Adapter "session" $r.Meta.SessionID "generated" .Generated}}</p>
+  <p>{{T "app.footer.privacy"}} · {{T "app.footer.prompts"}}</p>
+</footer>
+
+</div>
+<script>{{.JS}}</script>
+</body>
+</html>

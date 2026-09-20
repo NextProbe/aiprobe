@@ -1,0 +1,52 @@
+name: Feature request
+description: Suggest something AIProbe should do
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        AIProbe has a deliberately narrow scope: it answers where tokens went,
+        why they were wasted, and how to recover them.
+
+        Requests that are declined are declined on scope, not on merit.
+
+  - type: dropdown
+    id: question
+    attributes:
+      label: Which of the three questions does this help answer
+      description: >
+        AIProbe exists to answer three questions. Anything that does not help
+        with one of them does not ship, however good it is.
+      options:
+        - Where did the tokens go?
+        - Why were they wasted?
+        - What should I change?
+        - None of them directly, but here is why it still belongs
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: >
+        What did you want to find out about a session, and what stopped you? Please
+        describe the situation rather than the solution.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like it to do
+    validations:
+      required: true
+
+  - type: textarea
+    id: provenance
+    attributes:
+      label: Where would the numbers come from
+      description: >
+        Measured from provider counters, estimated by AIProbe, or inferred from
+        local evidence? If the answer is sometimes "unknown", say when — reporting
+        unknown is preferred over guessing.

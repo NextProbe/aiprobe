@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: check (${{ matrix.os }})
+    # The tool reads paths under the user's home directory and renders
+    # width-sensitive terminal output, so it is verified on every platform it
+    # claims to support rather than on Linux alone.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: gofmt
+        if: runner.os != 'Windows'
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "these files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./...
+
+      - name: build
+        run: go build ./...
+
+  race:
+    name: race detector
+    # serve is the only concurrent component, so this exists mainly to keep it
+    # honest.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go test -race ./...
+
+  demo:
+    name: demo runs clean
+    # A first-time reader's first command is `aiprobe demo`. If that breaks,
+    # nothing else matters.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: make build
+      - name: terminal report
+        run: ./bin/aiprobe demo --no-color
+      - name: terminal report, Chinese
+        run: ./bin/aiprobe demo --no-color --lang zh
+      - name: HTML report
+        run: ./bin/aiprobe demo --html -o /tmp/report.html
+      - name: JSON report
+        run: ./bin/aiprobe demo --json -o /tmp/report.json
+      - name: no network reference in the HTML output
+        # The report promises it makes no outbound requests. Grep the artifact
+        # rather than trusting the promise.
+        run: |
+          if grep -Eio 'https?://[^"'"'"' ]+' /tmp/report.html \
+             | grep -Ev 'w3\.org|127\.0\.0\.1|localhost' ; then
+            echo "the HTML report references an external URL"
+            exit 1
+          fi
