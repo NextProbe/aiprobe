@@ -18,6 +18,10 @@ English | [简体中文](README.zh-CN.md)
 [![Go Report Card](https://goreportcard.com/badge/github.com/NextProbe/aiprobe)](https://goreportcard.com/report/github.com/NextProbe/aiprobe)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
+![aiprobe HTML dashboard: score, headline waste and cost](docs/screenshots/dashboard-hero.png)
+
+The same session, from the terminal:
+
 ```
 $ aiprobe analyze
 
@@ -36,18 +40,16 @@ risk:
 
 ```sh
 go install github.com/NextProbe/aiprobe@latest
-aiprobe demo        # reproduces exactly the output above
-aiprobe analyze     # then: your own most recent session
+aiprobe demo             # reproduces the report the screenshot above is from
+aiprobe demo --html -o demo.html && open demo.html   # or the dashboard
+aiprobe analyze          # then: your own most recent session
 ```
 
 The complete report that `demo` prints, all seven sections, is committed at
-[docs/demo-report.txt](docs/demo-report.txt).
-
-<!-- Terminal recording: docs/demo.gif, referenced here once recorded.
-     asciinema rec -c "aiprobe demo" docs/demo.cast
-     agg --font-size 15 --theme asciinema docs/demo.cast docs/demo.gif
-     The committed docs/demo-report.txt is the text equivalent and is kept in
-     sync by TestReadmeHeadlineMatchesDemo plus `make gen`. -->
+[docs/demo-report.txt](docs/demo-report.txt). Every screenshot in this README
+(including the terminal one in the [gallery](#screenshot-gallery) at the
+bottom) comes from `aiprobe demo`, so they are reproducible with the scripts
+under [scripts/](scripts/) — nothing on your machine is required.
 
 ---
 
@@ -432,7 +434,8 @@ ticket. It works offline because it has to: it never had a network dependency to
 lose.
 
 It contains the same data as `--json`, laid out as a browsable dashboard with
-per-turn cache charts, sortable tables and the full findings list.
+per-turn cache charts, sortable tables and the full findings list — see the
+[screenshot gallery](#screenshot-gallery) at the bottom of this README.
 
 ### Measuring MCP tool schema cost
 
@@ -725,6 +728,79 @@ Every document has a Chinese counterpart. 每份文档都有中文版。
 
 Bug reports, adapters for other agents, and translations are all welcome. Start
 with [CONTRIBUTING.md](CONTRIBUTING.md) ([中文](CONTRIBUTING.zh-CN.md)).
+
+## Screenshot gallery
+
+Every screenshot below comes from the bundled synthetic demo session — either
+`aiprobe demo` (terminal) or `aiprobe demo --html` (dashboard). Regenerate them
+with `scripts/screenshots.ps1` (Windows) or `scripts/screenshots.sh`
+(macOS/Linux).
+
+### The local web interface
+
+`aiprobe serve` opens a loopback-only page for picking a session, watching your
+history, and running one-click cross-runtime aggregates. Reports open in the
+page; the language switch stays on whatever page you are reading.
+
+![aiprobe serve: Sessions page with per-runtime aggregates](docs/screenshots/serve-sessions.png)
+
+![aiprobe serve: Runtimes page showing each supported runtime and what it reports](docs/screenshots/serve-runtimes.png)
+
+Every AIProbe page is bilingual — the same content is available in English and
+简体中文:
+
+![aiprobe serve: Sessions page rendered in 简体中文](docs/screenshots/serve-sessions-zh.png)
+
+### Dashboard, dark theme
+
+The dashboard used for the hero above is shown in the light theme. The same
+report renders in dark, following the reader's system preference:
+
+![HTML dashboard: the header rendered in the dark theme](docs/screenshots/dashboard-hero-dark.png)
+
+### What to change
+
+Deterministic rules over the session, each finding with the recoverable token
+count, the evidence it fired on, and steps to carry out the fix.
+
+![HTML dashboard: What to change (findings) view](docs/screenshots/dashboard-findings.png)
+
+### Prompt cache
+
+Per-turn cache hit ratio and prefix drift attribution. The turns where the
+prefix broke are labelled with a cause, not just a number.
+
+![HTML dashboard: Prompt cache chart and drift attribution](docs/screenshots/dashboard-cache.png)
+
+### MCP tool tax
+
+How many tools each server contributed to the prompt, how many were actually
+called, and how many billed tokens the never-called ones cost across the
+session.
+
+![HTML dashboard: MCP tool tax breakdown](docs/screenshots/dashboard-mcp.png)
+
+### Duplicate context
+
+Files read multiple times, shell output repeated verbatim, and tool results
+returned identically — each row shows what it cost once and what it cost
+across every later request that had to carry it.
+
+![HTML dashboard: Duplicate context breakdown](docs/screenshots/dashboard-dup.png)
+
+### Context Efficiency Score
+
+Five components, one 0–100 score. The formula is deterministic and published
+in [docs/scoring.md](docs/scoring.md) — no model is involved.
+
+![HTML dashboard: Context Efficiency Score breakdown](docs/screenshots/dashboard-score.png)
+
+### The terminal report
+
+If you prefer the CLI, `aiprobe demo` prints the same seven sections without
+opening a browser:
+
+![aiprobe demo terminal output](docs/screenshots/terminal.png)
 
 ## License
 

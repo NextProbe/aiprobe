@@ -16,6 +16,10 @@ Claude Code、Kiro、Kiro CLI、Cursor 和 Codex CLI 都会把每个会话的记
 [![Go Report Card](https://goreportcard.com/badge/github.com/NextProbe/aiprobe)](https://goreportcard.com/report/github.com/NextProbe/aiprobe)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
+![AIProbe HTML dashboard：分数、浪费总览、成本](docs/screenshots/dashboard-hero.png)
+
+同一份会话，在终端里长这样：
+
 ```
 $ aiprobe analyze --lang zh
 
@@ -33,12 +37,15 @@ $ aiprobe analyze --lang zh
 
 ```sh
 go install github.com/NextProbe/aiprobe@latest
-aiprobe demo --lang zh   # 精确复现上面的输出
-aiprobe analyze          # 然后：你自己最近的那个会话
+aiprobe demo --lang zh                                # 复现出上面截图那份报告
+aiprobe demo --html -o demo.html && start demo.html   # 或者打开 HTML dashboard
+aiprobe analyze                                       # 然后：你自己最近的那个会话
 ```
 
 `demo` 打印的完整报告（全部七个章节）已提交在
-[docs/demo-report.txt](docs/demo-report.txt)（英文版）。
+[docs/demo-report.txt](docs/demo-report.txt)（英文版）。本 README 里的每一张
+截图（包括底部[画廊](#截图画廊)里那张终端截图）都来自 `aiprobe demo`，可用
+[scripts/](scripts/) 下的脚本重现 —— 你本机不需要任何东西。
 
 ---
 
@@ -392,7 +399,7 @@ aiprobe serve --lang zh  # 以中文启动
 可以失去。
 
 内容和 `--json` 完全一致，只是排成了可浏览的仪表盘：每轮的缓存曲线图、可排序的表格
-和完整的发现列表。
+和完整的发现列表 —— 参见 README 底部的[截图画廊](#截图画廊)。
 
 ### 测量 MCP 工具 schema 成本
 
@@ -655,6 +662,72 @@ token 去哪了、为什么被浪费、以及怎么把它们省回来。
 
 欢迎 bug 报告、其他 agent 的适配器，以及翻译。请从
 [CONTRIBUTING.zh-CN.md](CONTRIBUTING.zh-CN.md) 开始。
+
+## 截图画廊
+
+下面每一张截图都来自内置合成会话 —— 要么是 `aiprobe demo`（终端），要么是
+`aiprobe demo --html`（dashboard）。想重新生成，运行
+`scripts/screenshots.ps1`（Windows）或 `scripts/screenshots.sh`（macOS/Linux）。
+
+### 本地网页界面
+
+`aiprobe serve` 打开一个仅监听回环地址的本地页面，用来挑一个会话、观察历史、
+一键跨运行时汇总。报告在页面内打开；切换语言不会跳走当前页面。
+
+![aiprobe serve：会话列表页，附按运行时的一键汇总](docs/screenshots/serve-sessions-zh.png)
+
+![aiprobe serve：运行时页，列出每个支持的运行时以及它能报告哪些指标](docs/screenshots/serve-runtimes.png)
+
+AIProbe 每一个页面都是双语的 —— 同样内容支持中英文切换：
+
+![aiprobe serve：Sessions page in English](docs/screenshots/serve-sessions.png)
+
+### Dashboard 深色主题
+
+顶部 hero 显示的是浅色主题，同一份报告也支持深色主题，默认跟随读者系统偏好：
+
+![HTML dashboard：同一头部的深色主题渲染](docs/screenshots/dashboard-hero-dark.png)
+
+### 该改什么
+
+对会话跑一遍确定性规则，每条 finding 都带上可回收 token 数、命中的证据，
+以及具体的修复步骤。
+
+![HTML dashboard：What to change 发现列表](docs/screenshots/dashboard-findings.png)
+
+### Prompt 缓存
+
+每轮的缓存命中率，以及 prefix drift 原因归因。哪些轮次前缀被打破，都标注了
+明确原因，而不只是一个数字。
+
+![HTML dashboard：Prompt cache 曲线和 drift 归因](docs/screenshots/dashboard-cache.png)
+
+### MCP 工具税
+
+每个 MCP server 往 prompt 里塞了多少工具、真正被调用了几个，以及那些
+从未被调用的工具在整个会话里花掉了多少 token。
+
+![HTML dashboard：MCP tool tax 明细](docs/screenshots/dashboard-mcp.png)
+
+### 重复上下文
+
+多次读取的文件、原样重复的 shell 输出、返回相同内容的工具结果 —— 每一行都
+标出这一次的成本，以及它被后续每一次请求继续承担时的累计成本。
+
+![HTML dashboard：Duplicate context 明细](docs/screenshots/dashboard-dup.png)
+
+### 上下文效率分数
+
+五个组件、一个 0–100 分。公式是确定性的，全部公开在
+[docs/scoring.md](docs/scoring.md) —— 没有任何模型参与打分。
+
+![HTML dashboard：Context Efficiency Score 明细](docs/screenshots/dashboard-score.png)
+
+### 终端报告
+
+如果你更喜欢 CLI，`aiprobe demo` 会在不开浏览器的前提下打印同样的七个章节：
+
+![aiprobe demo 终端输出](docs/screenshots/terminal.png)
 
 ## 许可
 

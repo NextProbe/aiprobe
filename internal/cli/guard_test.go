@@ -141,9 +141,14 @@ func TestReadmeHeadlineMatchesDemo(t *testing.T) {
 	if !strings.Contains(readme, "$ aiprobe analyze") {
 		t.Error("README.md must show the analyze invocation on the first screen")
 	}
-	// A screenshot or recording placeholder.
-	if !strings.Contains(readme, "demo.gif") && !strings.Contains(readme, "demo.cast") {
-		t.Error("README.md should reference a terminal recording")
+	// A visual placeholder: an asciinema recording (demo.cast / demo.gif) or a
+	// screenshot committed under docs/screenshots. The exact medium is not the
+	// point -- the guarantee is that a reader who skims the README sees the tool
+	// in action, so a rewrite that drops every image is caught.
+	if !strings.Contains(readme, "demo.gif") &&
+		!strings.Contains(readme, "demo.cast") &&
+		!strings.Contains(readme, "docs/screenshots/") {
+		t.Error("README.md should reference a terminal recording or a screenshot")
 	}
 }
 
