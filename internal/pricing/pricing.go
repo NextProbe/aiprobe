@@ -516,17 +516,38 @@ func (c Cost) Empty() bool { return !c.Known || c.Total == 0 }
 // estimated should be true when the token counts came from the estimator rather
 // than from provider counters, so the cost carries the same provenance as its input.
 func (t *Table) OfUsage(model string, u trace.Usage, estimated bool) Cost {
+	return t.RateCard(model).Cost(u, estimated)
+}
+
+// RateCard is one model's effective price, looked up once and reused.
+//
+// Pricing a session request by request would otherwise repeat the lookup, prefix
+// match included, for every request at the same model.
+type RateCard struct {
+	model, currency string
+	price           Price
+	source          Source
+	ok              bool
+}
+
+// RateCard looks a model up once. OfUsage is RateCard(model).Cost(u, estimated).
+func (t *Table) RateCard(model string) RateCard {
 	p, src, ok := t.Lookup(model)
-	c := Cost{Currency: t.currency, Model: model, Source: src,
-		Estimated: estimated, Approximate: src.Approximate()}
-	if !ok {
+	return RateCard{model: model, currency: t.currency, price: p, source: src, ok: ok}
+}
+
+// Cost prices a usage record exactly as OfUsage always has.
+func (r RateCard) Cost(u trace.Usage, estimated bool) Cost {
+	c := Cost{Currency: r.currency, Model: r.model, Source: r.source,
+		Estimated: estimated, Approximate: r.source.Approximate()}
+	if !r.ok {
 		return c
 	}
 	c.Known = true
-	c.Input = perMillion(u.InputTokens, p.Input)
-	c.Output = perMillion(u.OutputTokens, p.Output)
-	c.CacheWrite = perMillion(u.CacheCreationInputTokens, p.CacheWrite)
-	c.CacheRead = perMillion(u.CacheReadInputTokens, p.CacheRead)
+	c.Input = perMillion(u.InputTokens, r.price.Input)
+	c.Output = perMillion(u.OutputTokens, r.price.Output)
+	c.CacheWrite = perMillion(u.CacheCreationInputTokens, r.price.CacheWrite)
+	c.CacheRead = perMillion(u.CacheReadInputTokens, r.price.CacheRead)
 	c.Total = c.Input + c.Output + c.CacheWrite + c.CacheRead
 	return c
 }

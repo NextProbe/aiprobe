@@ -119,6 +119,27 @@ type Breakdown struct {
 	// TransientTokens is the estimated cost of content the runtime dropped after
 	// a single prompt instead of carrying it forward.
 	TransientTokens trace.Amount `json:"transient_tokens"`
+
+	// Attribution is the same accumulation broken out by position. Not
+	// serialized: it exists so the questions section sums to these totals.
+	Attribution *Attribution `json:"-"`
+}
+
+// Attribution is the same accumulation broken out by position, so a consumer that
+// splits the session (the questions section) sums to exactly these totals instead
+// of re-deriving them. Not serialized.
+type Attribution struct {
+	// Exposure[r] is the calibrated resident context billed at request r: the same
+	// value added to the category totals and reported as RequestPoint.VisibleEstimate.
+	// Zero for a request the event loop never reaches.
+	Exposure []int
+	// FirstSent[r] is the part of Exposure[r] that request r is the first to send:
+	// what its chain gained since the previous request on that chain, or since the
+	// chain's last compaction if that came later. Never more than Exposure[r].
+	FirstSent []int
+	// Charged[e] is the part of event e billed once at e because the runtime
+	// dropped the content after one prompt (Event.Transient).
+	Charged []int
 }
 
 // finishEstimateOnly completes a breakdown for a session with no provider token
@@ -247,7 +268,13 @@ func Compute(tr *trace.Trace, split SchemaSplit) *Breakdown {
 		Method:  tokenize.Method,
 	}
 
-	billed, inserted, items, timeline := accumulate(tr, cal)
+	att := &Attribution{
+		Exposure:  make([]int, len(tr.Requests)),
+		FirstSent: make([]int, len(tr.Requests)),
+		Charged:   make([]int, len(tr.Events)),
+	}
+	billed, inserted, items, timeline := accumulate(tr, cal, att)
+	b.Attribution = att
 
 	visibleBilled := 0
 	for _, v := range billed {
@@ -348,13 +375,19 @@ func Compute(tr *trace.Trace, split SchemaSplit) *Breakdown {
 // content already in the conversation. At each request the running totals are
 // added to the billed attribution, which is what "re-sent on every request"
 // means in token terms.
-func accumulate(tr *trace.Trace, cal *tokenize.Calibrator) (billed, inserted map[trace.Category]int, items map[trace.Category]int, timeline []RequestPoint) {
+//
+// att receives the same figures by position (see Attribution). It is filled in
+// this loop, next to the totals, so the two cannot drift apart.
+func accumulate(tr *trace.Trace, cal *tokenize.Calibrator, att *Attribution) (billed, inserted map[trace.Category]int, items map[trace.Category]int, timeline []RequestPoint) {
 	billed = map[trace.Category]int{}
 	inserted = map[trace.Category]int{}
 	items = map[trace.Category]int{}
 
 	type chain struct {
 		running map[trace.Category]int
+		// pending is the resident content added since this chain's previous
+		// request: what its next request sends for the first time.
+		pending int
 	}
 	chains := map[bool]*chain{
 		false: {running: map[trace.Category]int{}},
@@ -373,6 +406,9 @@ func accumulate(tr *trace.Trace, cal *tokenize.Calibrator) (billed, inserted map
 				billed[cat] += v
 				visible += v
 			}
+			att.Exposure[ev.RequestIndex] = visible
+			att.FirstSent[ev.RequestIndex] = ch.pending
+			ch.pending = 0
 			residual := r.Usage.PromptTokens() - visible
 			clamped := false
 			if residual < 0 {
@@ -398,6 +434,7 @@ func accumulate(tr *trace.Trace, cal *tokenize.Calibrator) (billed, inserted map
 			for k := range ch.running {
 				ch.running[k] = 0
 			}
+			ch.pending = 0
 		}
 		if !ev.InContext() || ev.Tokens == 0 {
 			continue
@@ -410,9 +447,11 @@ func accumulate(tr *trace.Trace, cal *tokenize.Calibrator) (billed, inserted map
 				// carried, so it goes straight to the billed total instead of
 				// into the running resident context.
 				billed[cat] += tok
+				att.Charged[i] += tok
 				continue
 			}
 			ch.running[cat] += tok
+			ch.pending += tok
 		}
 	}
 	return billed, inserted, items, timeline

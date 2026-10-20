@@ -22,6 +22,9 @@ const (
 	recTypeAssistant = "assistant"
 	recTypeSystem    = "system"
 	recTypeSnapshot  = "file-history-snapshot"
+	// recTypeAttachment carries side content: IDE state, reminders, and messages
+	// the person queued while the agent was working.
+	recTypeAttachment = "attachment"
 )
 
 // rawRecord is one JSONL line. Every field is optional.
@@ -63,6 +66,19 @@ type rawRecord struct {
 
 	// Some versions place usage at the top level rather than under message.
 	Usage *rawUsage `json:"usage"`
+
+	// attachment records. Raw, and decoded only in the attachment branch, so a
+	// shape this adapter has not seen cannot cost the line it sits on.
+	Attachment json.RawMessage `json:"attachment"`
+}
+
+// rawAttachment is decoded only inside the attachment branch. Every field is raw
+// so a shape this adapter has not seen reads as absent instead of costing the line.
+type rawAttachment struct {
+	Type        json.RawMessage `json:"type"`
+	Prompt      json.RawMessage `json:"prompt"`
+	CommandMode json.RawMessage `json:"commandMode"`
+	Origin      json.RawMessage `json:"origin"` // {"kind": "..."}
 }
 
 // rawMessage is the Anthropic Messages API payload embedded in a record.

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/NextProbe/aiprobe/internal/adapters/kiro"
+	"github.com/NextProbe/aiprobe/internal/i18n"
 	"github.com/NextProbe/aiprobe/internal/tokenize"
 	"github.com/NextProbe/aiprobe/internal/trace"
 )
@@ -31,6 +32,15 @@ const FallbackContextWindowTokens = 200000
 
 // ErrNoRecords is returned for a session with nothing decodable in it.
 var ErrNoRecords = errors.New("no Kiro CLI session records found")
+
+// Why this session's credit charge is unknown. They reach the reader through
+// Trace.CreditsUnavailable rather than as literal lookups, so they are kept
+// together here; each must exist in both catalogs.
+const (
+	msgNoSidecar         = "credits.unavailable.no_sidecar"
+	msgSidecarUnreadable = "credits.unavailable.sidecar_unreadable"
+	msgNoMetering        = "credits.unavailable.no_metering"
+)
 
 // ParseFile reads a Kiro CLI session.
 //
@@ -58,6 +68,8 @@ func ParseFile(path string) (*trace.Trace, error) {
 			"transcript %s could not be read (%v); the conversation was reconstructed from the sidecar, which stores only each turn's final assistant message, so context and tool figures are incomplete",
 			filepath.Base(transcript), parseErr))
 		rebuildFromSidecar(tr, sc)
+		// Without the transcript there are no prompts to split the session at.
+		tr.Prompts = trace.PromptsMissing
 	}
 
 	if abs, err := filepath.Abs(transcript); err == nil {
@@ -68,8 +80,10 @@ func ParseFile(path string) (*trace.Trace, error) {
 			tr.Warnings = append(tr.Warnings, fmt.Sprintf(
 				"no sidecar %s beside this transcript, so Kiro CLI's credit charge, context utilization and stated context window are unavailable for this session",
 				filepath.Base(side)))
+			tr.CreditsUnavailable = &i18n.Msg{ID: msgNoSidecar}
 		} else {
 			tr.Warnings = append(tr.Warnings, fmt.Sprintf("could not read sidecar %s: %v", filepath.Base(side), sideErr))
+			tr.CreditsUnavailable = &i18n.Msg{ID: msgSidecarUnreadable}
 		}
 		tr.ContextWindowTokens = FallbackContextWindowTokens
 		tr.ContextWindowSource = fmt.Sprintf(
@@ -229,6 +243,7 @@ func Parse(r io.Reader, sourceName string) (*trace.Trace, error) {
 		return nil, ErrNoRecords
 	}
 	p.finish()
+	tr.Prompts = trace.PromptsClassified
 	return tr, nil
 }
 
@@ -433,6 +448,11 @@ func (p *parser) addUser(rec record, ts time.Time, lineNo int) {
 	ev.Role = "user"
 	ev.Text = decodeContent(rec.Content)
 	ev.MessageID = rec.MessageID
+	// A Prompt record is what the person typed. Its display form is the text
+	// items alone: decodeContent serialises images and other items into Text so
+	// their weight counts, and none of that belongs in a preview.
+	ev.Origin = trace.OriginPrompt
+	ev.Display = promptText(rec.Content)
 	p.add(ev, ts, lineNo)
 	// A user turn always starts a new provider call.
 	p.pendingRequest = true
@@ -727,6 +747,8 @@ func applySidecar(tr *trace.Trace, sc *sidecar) {
 func applyTurns(tr *trace.Trace, sc *sidecar) {
 	turns := sc.SessionState.ConversationMetadata.UserTurnMetadatas
 	if len(turns) == 0 {
+		// No turns means no metering: the charge is unknown, not zero.
+		tr.CreditsUnavailable = &i18n.Msg{ID: msgNoMetering}
 		return
 	}
 
@@ -759,17 +781,27 @@ func applyTurns(tr *trace.Trace, sc *sidecar) {
 		// Locate the event this turn ended on, so its utilization sample lands at
 		// the right point in the timeline. Message ids are the reliable join;
 		// position is the fallback for turns whose ids are not in the transcript.
-		evIdx := -1
+		evIdx, firstIdx := -1, -1
 		for _, id := range t.MessageIDs {
-			if i, ok := eventByMsgID[id]; ok && i > evIdx {
-				evIdx = i
+			if i, ok := eventByMsgID[id]; ok {
+				if i > evIdx {
+					evIdx = i
+				}
+				if firstIdx < 0 || i < firstIdx {
+					firstIdx = i
+				}
 			}
 		}
 		if evIdx < 0 && t.Result != nil && t.Result.Ok != nil {
 			if i, ok := eventByMsgID[t.Result.Ok.ID]; ok {
-				evIdx = i
+				evIdx, firstIdx = i, i
 			}
 		}
+		// The turn itself, placed by exactly the joins above. A turn neither
+		// resolves is unplaced (Start -1), which is precisely the case in which
+		// its token counts below land on a position-guessed request.
+		rt := runtimeTurn(t, firstIdx, evIdx, c)
+		tr.Turns = append(tr.Turns, rt)
 		if evIdx < 0 {
 			evIdx = fallbackEventIndex(tr, ti, len(turns))
 		}
@@ -805,6 +837,12 @@ func applyTurns(tr *trace.Trace, sc *sidecar) {
 
 	if unit == "" && credits == 0 {
 		tr.Warnings = append(tr.Warnings, "this session's sidecar records no metering usage, so Kiro CLI's credit charge is unknown")
+		tr.CreditsUnavailable = &i18n.Msg{ID: msgNoMetering}
+	}
+	if tokenTurns > 0 {
+		// The counters, where present, carry input and output only; a zero cache
+		// class means "not reported", not "none".
+		tr.UnreportedUsage = []trace.UsageClass{trace.UsageCacheRead, trace.UsageCacheWrite}
 	}
 
 	// A turn is not a request. Saying so is necessary because every per-request
@@ -828,6 +866,35 @@ func applyTurns(tr *trace.Trace, sc *sidecar) {
 		tr.Warnings = append(tr.Warnings, fmt.Sprintf(
 			"%d turn(s) ended in an error; they still consumed credits and context", failedTurns))
 	}
+}
+
+// runtimeTurn is one sidecar turn as a trace turn, spanning events first..last
+// (-1 when the turn could not be placed). charge is the turn's metering total,
+// known only when the turn recorded metering at all.
+func runtimeTurn(t *turnMetadata, first, last int, charge float64) trace.RuntimeTurn {
+	rt := trace.RuntimeTurn{
+		Start:            first,
+		End:              last,
+		EndTime:          parseTime(t.EndTimestamp),
+		Duration:         t.TurnDuration.duration(),
+		ReportedRequests: t.TotalRequestCount,
+	}
+	if last < 0 {
+		rt.Start, rt.End = -1, -1
+	}
+	if len(t.MeteringUsage) > 0 {
+		rt.Charge = trace.KnownFloat(charge)
+	}
+	reason := strings.ToLower(t.EndReason)
+	switch {
+	case t.Result != nil && len(t.Result.Err) > 0 && strings.TrimSpace(string(t.Result.Err)) != "null":
+		rt.Status = trace.TurnFailed
+	case strings.Contains(reason, "interrupt"):
+		rt.Status = trace.TurnInterrupted
+	case strings.Contains(reason, "cancel"), strings.Contains(reason, "abort"):
+		rt.Status = trace.TurnCancelled
+	}
+	return rt
 }
 
 // fallbackEventIndex spreads turns evenly across the timeline when message ids

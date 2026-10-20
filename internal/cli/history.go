@@ -62,8 +62,12 @@ second time it is viewed, and so a session analysed more than once shows whether
 its numbers are moving in the right direction.
 
 What is stored is the same JSON a report contains: counts, fingerprints, file
-paths, tool names and short excerpts. No prompt text, no file contents, no command
-output. Delete all of it with --clear.
+paths, tool names, session titles and short credential-scrubbed excerpts, plus
+each session's cost row for the Sessions and History pages. No prompt text, no
+file contents, no command output: the one-line question previews the terminal and
+the local pages show are never written here. Session titles are the runtime's
+own, and some runtimes title a session with the first line of its first message.
+Delete all of it with --clear.
 
 Examples:
   aiprobe history
@@ -103,6 +107,12 @@ Examples:
 
 			entries := st.List(limit)
 			if asJSON {
+				// The command-line history keeps its existing shape; the cost
+				// summary is for the pages that list sessions. List returns a
+				// copy, so this does not touch what is stored.
+				for i := range entries {
+					entries[i].Summary = nil
+				}
 				enc := json.NewEncoder(out)
 				enc.SetIndent("", "  ")
 				return enc.Encode(entries)

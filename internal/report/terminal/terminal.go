@@ -40,6 +40,13 @@ type Options struct {
 	Verbose bool
 	// Locale selects the report language. Empty means English.
 	Locale i18n.Locale
+
+	// Sort orders the questions table; SortAuto uses Questions.DefaultSort.
+	Sort analyzer.SortKey
+	// Question, when positive, prints only that question in full (--question).
+	Question int
+	// Previews are shown in the Question column when non-nil.
+	Previews map[int]string
 }
 
 func (o Options) withDefaults() Options {
@@ -60,6 +67,9 @@ type printer struct {
 	verb  bool
 	err   error
 	p     *i18n.Printer
+
+	sort     analyzer.SortKey
+	previews map[int]string
 }
 
 // t renders a message with no arguments.
@@ -103,15 +113,24 @@ func Write(w io.Writer, res *analyzer.Result, opts Options) error {
 	p := &printer{
 		w: w, color: opts.Color, width: opts.Width,
 		topN: opts.TopN, verb: opts.Verbose, p: i18n.New(opts.Locale),
+		sort: opts.Sort, previews: opts.Previews,
 	}
 
 	p.header(res)
+	if opts.Question > 0 {
+		// One question in full and nothing else: the view for auditing a single
+		// task, where the other sections would only bury it.
+		p.focus(res, opts.Question)
+		p.footer(res)
+		return p.err
+	}
 	p.headline(res)
 	p.breakdown(res)
 	p.mcp(res)
 	p.duplicates(res)
 	p.cache(res)
 	p.spend(res)
+	p.questions(res)
 	p.scoreSection(res)
 	p.recommendations(res)
 	p.footer(res)
@@ -693,7 +712,7 @@ func (p *printer) cache(res *analyzer.Result) {
 
 func (p *printer) scoreSection(res *analyzer.Result) {
 	s := res.Score
-	p.section(6, p.t("section.score"), p.t("section.score.right")+" ")
+	p.section(7, p.t("section.score"), p.t("section.score.right")+" ")
 	headline := fmt.Sprintf("%d/100  %s", s.Value, s.Grade)
 	if s.KnownWeight == 0 {
 		headline = p.t("value.na")
@@ -727,7 +746,7 @@ func (p *printer) scoreSection(res *analyzer.Result) {
 }
 
 func (p *printer) recommendations(res *analyzer.Result) {
-	p.section(7, p.t("section.findings"), p.ta("section.findings.right", i18n.Args{"count": len(res.Recommendations)})+" ")
+	p.section(8, p.t("section.findings"), p.ta("section.findings.right", i18n.Args{"count": len(res.Recommendations)})+" ")
 	if len(res.Recommendations) == 0 {
 		p.line("  " + p.green(p.t("findings.none")))
 		return

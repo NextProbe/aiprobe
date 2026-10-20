@@ -310,6 +310,90 @@ table.data tr:last-child td { border-bottom: 0; }
 .spend-table td:first-child { width: 45%; }
 .spend-table th.num, .spend-table td.num { width: 18%; }
 
+/* A wide table scrolls inside its card rather than running past the card's
+   edge: the safety net under the compact layouts below, so nothing is ever
+   silently cut off on a narrow window. */
+.tbl-scroll { overflow-x: auto; }
+/* A long name or path keeps one line and ends in an ellipsis; the cell's title
+   attribute carries the whole value. */
+.ell { display: block; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+table.data td.when { white-space: nowrap; }
+
+/* The questions panel. A question's button opens the detail row directly under
+   it, which spans the whole table; the tables inside the detail row are plain
+   (not "data"), so the outer sorter leaves them alone. Header labels may take
+   two lines, and the cells are padded tightly, so eleven columns fit a laptop
+   window; CJK labels stay whole (keep-all) rather than breaking per character.
+   The child selectors keep these rules off the tables nested in a detail row. */
+table.q-table > thead > tr > th { white-space: normal; word-break: keep-all; vertical-align: bottom; padding-right: 8px; }
+/* The sort mark stays with the label's last word instead of taking a line. */
+table.q-table th.sortable::after { content: "\00a0⇅"; }
+table.q-table th[aria-sort="ascending"]::after { content: "\00a0↑"; }
+table.q-table th[aria-sort="descending"]::after { content: "\00a0↓"; }
+table.q-table > tbody > tr > td, table.q-table > tfoot > tr > td { padding-right: 8px; }
+.q-table td.q-cell { min-width: 200px; max-width: 360px; }
+.q-toggle {
+  appearance: none;
+  background: none;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  color: var(--fg);
+  text-align: left;
+  cursor: pointer;
+}
+/* The triangle is decoration: aria-expanded already says open or closed, so the
+   "/ ''" alternative text keeps it out of the button's accessible name. The
+   plain declaration first is the fallback where that syntax is unknown. */
+.q-toggle::before { content: "▸ "; content: "▸ " / ""; color: var(--fg-faint); }
+.q-toggle[aria-expanded="true"]::before { content: "▾ "; content: "▾ " / ""; color: var(--accent); }
+.q-toggle:hover { color: var(--accent); }
+.q-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+.q-toggle .tag { margin-left: 4px; }
+/* Tool names never break inside a name: each is its own span, kept on one line,
+   and a list wraps only between tools. In the questions table a name too long
+   for the column ends in an ellipsis instead (its title has the whole name);
+   the request table in the detail row shows every name whole. */
+table.data td.q-tools { word-break: normal; overflow-wrap: normal; }
+.q-requests td:last-child span { white-space: nowrap; }
+.q-tools span { display: inline-block; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: top; }
+table.data tr.q-detail > td, .q-buckets tr.q-detail > td { padding: 10px 12px; background: var(--bg-panel-2); }
+.q-buckets tr.q-detail > td { background: var(--bg-panel); }
+.q-table tfoot td { padding: 8px 8px 4px 0; border-top: 1px solid var(--border); font-weight: 600; }
+.q-table tfoot td.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.q-classes, .q-requests, .q-buckets { border-collapse: collapse; font-size: 12px; margin: 4px 0 10px; }
+.q-requests { width: 100%; }
+.q-classes th, .q-requests th { color: var(--fg-faint); font-weight: 500; text-align: left; padding: 2px 12px 4px 0; border-bottom: 1px solid var(--border); }
+.q-classes td, .q-requests td { padding: 3px 12px 3px 0; border-bottom: 1px solid var(--border); color: var(--fg-dim); vertical-align: top; }
+.q-classes .num, .q-requests .num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.q-requests td.mono { font-family: var(--mono); }
+/* Times, models and numbers keep one line; only the tool list, the last column,
+   wraps, and it takes the width the others leave. Prefixed with .q-detail to
+   outrank the outer table.data cell rules these tables sit inside. */
+.q-detail .q-requests th, .q-detail .q-requests td { white-space: nowrap; }
+.q-detail .q-requests td:last-child { white-space: normal; word-break: normal; overflow-wrap: normal; width: 100%; }
+.q-buckets { width: 100%; font-size: 13px; background: var(--bg-panel-2); border-radius: var(--radius); }
+.q-buckets td { padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.q-buckets td.num { text-align: right; font-family: var(--mono); white-space: nowrap; }
+
+/* The cost ranking: tight cells and a shorter session column, so the eleven
+   columns fit beside each other. In a standalone file the last column names the
+   path, shortened, and the command that audits it, whole and wrapping anywhere
+   so it can always be copied. */
+table.rank-table > thead > tr > th, table.rank-table > tbody > tr > td { padding-right: 8px; }
+.rank-table .ell { max-width: 220px; }
+.rank-table td.rank-cmd { min-width: 180px; max-width: 280px; }
+/* width 0 + min-width 100%: the path fills the cell without its length widening
+   the column. */
+.rank-table td.rank-cmd .ell { width: 0; min-width: 100%; max-width: none; }
+.rank-cmd .cmd { display: block; overflow-wrap: anywhere; }
+/* Re-running an analysis that predates the questions section, on served pages
+   only. The status line is where the outcome is announced. */
+.q-reanalyse { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
+.q-reanalyse .status { color: var(--fg-dim); font-size: 13px; }
+button.btn:disabled { cursor: progress; color: var(--fg-faint); border-color: var(--border); }
+
 /* A class row is a component of the total, not a peer of the model rows. */
 .class-row .label { color: var(--fg-dim); }
 .rate-row td.rates {

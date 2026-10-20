@@ -24,10 +24,16 @@ MCP tool schemas are never written to a session transcript, so their cost cannot
 be measured from the transcript alone. Pass --tools with a tool inventory to
 turn the MCP Tool Tax section from partial into exact.
 
+The questions section splits the session at every question you asked and shows
+what each one cost, with a one-line preview of the question on your terminal.
+--question N prints one question in full, with every request it made.
+
 Examples:
   aiprobe analyze
   aiprobe analyze ~/.claude/projects/-Users-me-app/3f9c.jsonl
   aiprobe analyze --tools mcp-tools.json --verbose
+  aiprobe analyze --question 3
+  aiprobe analyze --sort time --verbose
   aiprobe analyze --json > report.json
   aiprobe analyze --html -o report.html`,
 		Args:         cobra.MaximumNArgs(1),
@@ -44,5 +50,8 @@ Examples:
 		},
 	}
 	f.register(cmd, true)
+	f.registerSort(cmd, false)
+	f.registerQuestion(cmd)
+	f.registerPreview(cmd, true, true)
 	return cmd
 }

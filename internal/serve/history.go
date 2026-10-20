@@ -38,6 +38,13 @@ type historyRow struct {
 	// ID is the picker handle, when the session is still on disk, so the row can
 	// link to a live report rather than only to a stored one.
 	ID string
+	// PricingDiffers marks a stored cost priced with another currency or
+	// discount than this server uses, by the rule the Sessions page applies.
+	PricingDiffers bool
+	// Legacy marks an analysis that predates the questions section (no cost
+	// row in the index, or a Legacy one), which the questions column names
+	// rather than showing a bare dash.
+	Legacy bool
 }
 
 // historyView is the history page's data model.
@@ -59,6 +66,10 @@ type historyView struct {
 	Cleared  bool
 	Error    string
 	Status   int
+	// ShowCost keeps the cost column, which --no-cost drops. CostDiffers adds the
+	// note that explains a ≠ on any row.
+	ShowCost    bool
+	CostDiffers bool
 }
 
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
@@ -71,6 +82,7 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		ThemeJS:     reporthtml.ThemeJS(),
 		ThemeToggle: themeToggle(loc),
 		Cleared:     r.URL.Query().Get("cleared") == "1",
+		ShowCost:    s.opts.Analyzer.Pricing != nil,
 	}
 
 	st := s.opts.Store
@@ -92,13 +104,19 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		live[store.SessionKey(string(sess.Adapter), sess.Path)] = sess.ID
 	}
 
+	ref := s.priceRef()
 	for _, e := range st.Sessions() {
 		trend := st.Trend(e.SessionKey)
 		row := historyRow{
-			Entry: e,
-			Runs:  len(trend),
-			Stale: e.Stale(s.opts.Version),
-			ID:    live[e.SessionKey],
+			Entry:  e,
+			Runs:   len(trend),
+			Stale:  e.Stale(s.opts.Version),
+			ID:     live[e.SessionKey],
+			Legacy: e.Summary == nil || e.Summary.Legacy,
+		}
+		if e.Summary != nil && ref.Differs(*e.Summary) {
+			row.PricingDiffers = true
+			v.CostDiffers = true
 		}
 		for _, t := range trend {
 			row.Scores = append(row.Scores, t.Score)

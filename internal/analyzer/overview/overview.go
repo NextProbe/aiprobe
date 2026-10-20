@@ -42,6 +42,7 @@ import (
 	analyzerctx "github.com/NextProbe/aiprobe/internal/analyzer/context"
 	"github.com/NextProbe/aiprobe/internal/analyzer/rules"
 	"github.com/NextProbe/aiprobe/internal/i18n"
+	"github.com/NextProbe/aiprobe/internal/redact"
 	"github.com/NextProbe/aiprobe/internal/trace"
 )
 
@@ -79,6 +80,19 @@ type Report struct {
 	// Spend sums the money across sessions. Nil when pricing was disabled; present
 	// with an unknown count when the sessions could not be priced.
 	Spend *SpendTotal `json:"spend,omitempty"`
+
+	// Ranking is every session, ordered by RankingSort: which session cost the
+	// most. Never cut to TopN; renderers decide how many rows to show.
+	Ranking []RankRow `json:"ranking"`
+	// RankingSort is the key the ranking is ordered by, after the default has
+	// been resolved.
+	RankingSort analyzer.SortKey `json:"ranking_sort"`
+	// RankingModelled is set when the ranking holds a session whose runtime
+	// charged it per turn while its money figure is modelled (Kiro): those
+	// amounts are estimates, and the credits beside them are the bill. Renderers
+	// say so next to the table, whatever it is ordered by; ordered by cost, they
+	// also point to the credits order.
+	RankingModelled bool `json:"ranking_modelled,omitempty"`
 
 	// Notes records the caveats that apply to the aggregate.
 	Notes    []string   `json:"notes,omitempty"`
@@ -271,6 +285,11 @@ type Options struct {
 	Adapter string
 	// TopN caps the ranked tables. Zero uses a sensible default.
 	TopN int
+	// Prices is the price table the caller uses now; nil means pricing is off
+	// and the ranking carries no money.
+	Prices *PriceRef
+	// Sort orders the cost ranking; SortAuto picks the default.
+	Sort analyzer.SortKey
 }
 
 const defaultTopN = 20
@@ -293,6 +312,8 @@ func Build(in []Input, failed []Failure, opts Options) *Report {
 	models := map[string]int{}
 	grades := map[string]int{}
 	var scores []int
+	ranking := []RankRow{}
+	differs := false
 
 	for _, item := range in {
 		res := item.Result
@@ -303,6 +324,12 @@ func Build(in []Input, failed []Failure, opts Options) *Report {
 
 		// ---- totals ----
 		m := res.Meta
+
+		// One cleaned title per session, shared by every table that names it.
+		// Some runtimes title a session with its first message, and these tables
+		// reach shareable JSON and HTML files and the terminal.
+		title := redact.SingleLine(firstNonEmpty(item.Title, m.Summary, m.SessionID), 80)
+		example := redact.SingleLine(label(item), 80)
 		r.Totals.Requests += m.Requests
 		r.Totals.ToolCalls += m.ToolCalls
 		r.Totals.Events += m.Events
@@ -387,7 +414,7 @@ func Build(in []Input, failed []Failure, opts Options) *Report {
 			ft.Confidence = lowerConfidence(ft.Confidence, rec.Confidence)
 			addOpt(&ft.Wasted, rec.WastedTokens)
 			if len(ft.Examples) < 3 {
-				ft.Examples = append(ft.Examples, label(item))
+				ft.Examples = append(ft.Examples, example)
 			}
 		}
 
@@ -410,7 +437,7 @@ func Build(in []Input, failed []Failure, opts Options) *Report {
 			Adapter:       m.Adapter,
 			SessionID:     m.SessionID,
 			Path:          m.SourcePath,
-			Title:         item.Title,
+			Title:         title,
 			Project:       firstNonEmpty(m.CWD, m.ProjectDir),
 			Model:         m.PrimaryModel,
 			StartUnix:     m.StartTimeUnix,
@@ -426,10 +453,30 @@ func Build(in []Input, failed []Failure, opts Options) *Report {
 		if res.Score != nil {
 			row.Score, row.Grade = res.Score.Value, res.Score.Grade
 		}
-		if row.Title == "" {
-			row.Title = firstNonEmpty(m.Summary, m.SessionID)
-		}
 		r.Worst = append(r.Worst, row)
+
+		// ---- cost ranking ----
+		// The numbers are the session's own, copied; the ranking adds nothing up.
+		rank := RankRow{
+			ID:           item.ID,
+			Adapter:      m.Adapter,
+			SessionID:    m.SessionID,
+			Path:         m.SourcePath,
+			Title:        title,
+			Project:      row.Project,
+			Model:        m.PrimaryModel,
+			StartUnix:    m.StartTimeUnix,
+			DurationSecs: m.DurationSecs,
+			Summary:      analyzer.SummaryOf(res),
+		}
+		if opts.Prices == nil {
+			// Pricing is off: no money, whatever the result was computed with.
+			rank.Summary.Cost = nil
+		} else if opts.Prices.Differs(rank.Summary) {
+			rank.PricingDiffers = true
+			differs = true
+		}
+		ranking = append(ranking, rank)
 	}
 
 	r.finishCategories(cats)
@@ -445,7 +492,26 @@ func Build(in []Input, failed []Failure, opts Options) *Report {
 		r.Waste.Share = clampShare(float64(r.Waste.Total.Tokens) / float64(r.Totals.ContextTokens))
 	}
 
+	r.RankingSort = opts.Sort
+	if r.RankingSort == analyzer.SortAuto {
+		r.RankingSort = DefaultRankingSort(ranking)
+	}
+	r.Ranking = SortRanking(ranking, r.RankingSort)
+	r.RankingModelled = rankingModelled(ranking)
+
 	r.addNotes()
+	if differs {
+		r.note("overview.note.pricing_differs", nil)
+	}
+	// The same caveat the renderers place under the table: ordered by cost, it
+	// also says how to order by what was charged.
+	if r.RankingModelled {
+		if r.RankingSort == analyzer.SortCost {
+			r.note("overview.ranking.modelled.cost", nil)
+		} else {
+			r.note("overview.ranking.modelled", nil)
+		}
+	}
 	return r
 }
 

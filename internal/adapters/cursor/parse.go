@@ -238,6 +238,7 @@ func build(s *store, composerID, source string) *trace.Trace {
 		p.consume(b, i+1)
 	}
 	p.finish()
+	tr.Prompts = trace.PromptsClassified
 	return tr
 }
 
@@ -328,6 +329,13 @@ func (p *parser) addUser(b bubble, ts time.Time, line int) {
 	ev.Role = "user"
 	ev.Text = b.Text
 	ev.MessageID = b.BubbleID
+	// A user bubble with text is what the person typed. One without text carries
+	// only attached context, which arrives as its own tool-result events.
+	if strings.TrimSpace(b.Text) != "" {
+		ev.Origin, ev.Display = trace.OriginPrompt, b.Text
+	} else {
+		ev.Origin = trace.OriginInjected
+	}
 	p.add(ev, ts, line)
 	p.pendingRequest = true
 }

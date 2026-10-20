@@ -498,6 +498,24 @@ type Event struct {
 	// Kiro drops file-write bodies after the call that produced them, which is
 	// verifiable against its own reported context utilization.
 	Transient bool `json:"transient,omitempty"`
+
+	// Origin is set by the adapter on every KindUserMessage event, and on a
+	// KindSystem event that records a command the person issued.
+	Origin Origin `json:"origin,omitempty"`
+	// Signal is a runtime-recorded interruption, cancellation or failure observed
+	// at this event (an interruption marker, an interrupted tool result, an API
+	// error message). It describes the work that was running when the runtime
+	// wrote it, so on a question-opening event it belongs to the previous
+	// question. Never inferred.
+	Signal TurnStatus `json:"signal,omitempty"`
+	// Display is the person-facing form of a question-opening message: injected
+	// wrappers removed, a slash command as "/name args", a shell command as
+	// "!cmd". Empty on every other event, and on a prompt that carried only
+	// attachments. Not truncated here; never serialized.
+	Display string `json:"-"`
+	// SubagentStart marks where the runtime started a subagent whose own requests
+	// are recorded outside this trace.
+	SubagentStart bool `json:"subagent_start,omitempty"`
 }
 
 // Retained reports whether the event stays in context for later requests. Only
@@ -572,6 +590,25 @@ type Trace struct {
 	// counters this is the only thing standing between an estimate and a
 	// fabrication, so it is part of the trace rather than an adapter detail.
 	Consistency *Consistency `json:"consistency,omitempty"`
+
+	// Prompts says whether the adapter classified user-role events.
+	Prompts Prompts `json:"prompts,omitempty"`
+	// Turns are the runtime's own turns, in timeline order. Empty for runtimes
+	// that record none (Claude Code, Cursor).
+	Turns []RuntimeTurn `json:"-"`
+	// UsageMismatch is set when per-request usage does not reconcile with the
+	// runtime's own cumulative figure (Codex drift check).
+	UsageMismatch bool `json:"usage_mismatch,omitempty"`
+	// UnreportedUsage lists token classes this runtime's counters never carry, so
+	// a zero there means "not reported", not "none".
+	UnreportedUsage []UsageClass `json:"unreported_usage,omitempty"`
+	// CreditsUnavailable is set by an adapter whose runtime bills in its own units
+	// when this session's charge could not be read, with the reason: the sidecar
+	// is missing, unreadable, or records no metering.
+	CreditsUnavailable *i18n.Msg `json:"-"`
+	// UnreadableUserRecords counts user-role records whose content could not be
+	// decoded, so whether a person wrote them is unknown.
+	UnreadableUserRecords int `json:"unreadable_user_records,omitempty"`
 }
 
 // Consistency is the result of comparing an estimate against an independently

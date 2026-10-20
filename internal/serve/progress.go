@@ -212,7 +212,10 @@ func (s *Server) runOverviewJob(key overviewKey, j *overviewJob, sessions []Sess
 	)
 	for _, sess := range sessions {
 		j.begin(sessionLabel(sess))
-		res, err := s.analyse(sess)
+		// The ranking needs every session's questions, so a stored analysis from
+		// before they existed is re-analysed here, once: the fresh result
+		// replaces it in the store.
+		res, err := s.analyseWith(sess, true)
 		if err != nil {
 			failures = append(failures, overview.Failure{Path: sess.Path, Error: err.Error()})
 			j.step(true)
@@ -229,6 +232,9 @@ func (s *Server) runOverviewJob(key overviewKey, j *overviewJob, sessions []Sess
 	agg := overview.Build(inputs, failures, overview.Options{
 		Adapter: j.adapter,
 		TopN:    50,
+		// Without it the ranking carries no money and cannot rank by cost; with
+		// it, a stored session priced another way is marked rather than compared.
+		Prices: s.priceRef(),
 	})
 
 	s.ovMu.Lock()

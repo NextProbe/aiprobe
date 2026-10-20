@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/NextProbe/aiprobe/internal/analyzer"
 	"github.com/NextProbe/aiprobe/internal/analyzer/overview"
 	"github.com/NextProbe/aiprobe/internal/analyzer/rules"
 	"github.com/NextProbe/aiprobe/internal/i18n"
@@ -181,6 +182,17 @@ func overviewFuncMap(p *i18n.Printer) template.FuncMap {
 	fm["gradecolor"] = gradeColor
 	fm["reporthref"] = func(tmpl, id string) string {
 		return strings.ReplaceAll(tmpl, "{id}", report.QueryEscape(id))
+	}
+	// rtop names a session's costliest segment: "#3 41%", or a bucket.
+	fm["rtop"] = func(t *analyzer.TopSegment) string {
+		share := report.PctRound(t.Share)
+		switch {
+		case t.Question > 0:
+			return fmt.Sprintf("#%d %s", t.Question, share)
+		case t.Bucket == analyzer.SegmentUnattributed:
+			return p.S("questions.bucket.unattributed.short") + " " + share
+		}
+		return p.S("questions.bucket.before_first.short") + " " + share
 	}
 	return fm
 }

@@ -77,7 +77,7 @@ func sessionIDFromName(base string) string {
 // and skipped rather than failing the run.
 func Parse(r io.Reader, sourceName string) (*trace.Trace, error) {
 	tr := &trace.Trace{Adapter: AdapterName, SourcePath: sourceName}
-	p := &parser{tr: tr, callByID: map[string]int{}, lastAssistant: -1}
+	p := &parser{tr: tr, callByID: map[string]int{}, lastAssistant: -1, openTurn: -1}
 
 	br := bufio.NewReaderSize(r, 1<<20)
 	lineNo := 0
@@ -99,6 +99,7 @@ func Parse(r io.Reader, sourceName string) (*trace.Trace, error) {
 		return nil, ErrNoRecords
 	}
 	p.finish()
+	tr.Prompts = trace.PromptsClassified
 	return tr, nil
 }
 
@@ -136,6 +137,9 @@ type parser struct {
 	lastTotal tokenUsage
 	// mcpUnclassified counts tools whose origin could not be established.
 	mcpUnclassified map[string]bool
+	// openTurn is the index in Trace.Turns of the task still running, -1 when
+	// none is.
+	openTurn int
 }
 
 func (p *parser) warn(format string, args ...any) {
@@ -199,13 +203,17 @@ func (p *parser) consume(line string, lineNo int) {
 	case recResponse:
 		p.addResponseItem(pl, ts, lineNo)
 	case recEventMsg:
-		if pl.Type == evtTokenCount {
+		switch pl.Type {
+		case evtTokenCount:
 			p.addUsage(pl, ts, lineNo)
+		case evtTaskStarted, evtTaskComplete, evtTurnAborted:
+			p.turnBoundary(pl.Type, env.Payload, ts)
 		}
 	case recCompacted:
 		ev := newEvent(trace.KindUserMessage, trace.CatMessages)
 		ev.Text = decodeContent(pl.Content)
 		ev.IsCompactSummary = true
+		ev.Origin = trace.OriginInjected
 		p.add(ev, ts, lineNo)
 	case "":
 		p.tr.SkippedLines++
@@ -305,12 +313,129 @@ func (p *parser) addMessage(pl payload, ts time.Time, lineNo int) {
 		ev.Role = pl.Role
 		ev.Text = text
 		p.add(ev, ts, lineNo)
-	default:
+	case "user":
 		ev := newEvent(trace.KindUserMessage, trace.CatMessages)
 		ev.Role = "user"
 		ev.Text = text
+		ev.Origin, ev.Display = classifyUser(text)
+		if ev.Origin == trace.OriginInjected {
+			// Only the <turn_aborted> wrapper is injected here, and it says the
+			// running turn was stopped.
+			ev.Signal = trace.TurnInterrupted
+		}
+		p.add(ev, ts, lineNo)
+		// A user message starts a turn, so whatever responded before it has had
+		// its usage already; a later token_count must not reach back to it.
+		p.lastAssistant = -1
+	default:
+		// A role this adapter does not know. Not known to be the person's, so it
+		// does not start a question.
+		ev := newEvent(trace.KindUserMessage, trace.CatMessages)
+		ev.Role = "user"
+		ev.Text = text
+		ev.Origin = trace.OriginInjected
 		p.add(ev, ts, lineNo)
 	}
+}
+
+// classifyUser decides who wrote a role=user message (the first rule that
+// matches wins). Codex writes its per-turn wrappers into the user role ahead of
+// the person's prompt.
+func classifyUser(text string) (trace.Origin, string) {
+	t := strings.TrimSpace(text)
+	switch {
+	case strings.HasPrefix(t, "<environment_context>"),
+		strings.HasPrefix(t, "<user_instructions>"),
+		strings.HasPrefix(t, "# AGENTS.md instructions"):
+		return trace.OriginPreamble, ""
+	case strings.HasPrefix(t, "<turn_aborted>"):
+		return trace.OriginInjected, ""
+	case strings.HasPrefix(t, "<user_shell_command>"):
+		// The command alone: its output must not reach a preview.
+		return trace.OriginShell, "!" + shellCommand(t)
+	}
+	return trace.OriginPrompt, t
+}
+
+// shellCommand reads the command out of a <user_shell_command> wrapper: the
+// inner <command> tag, or else the wrapper's first line.
+func shellCommand(t string) string {
+	if cmd, ok := between(t, "<command>", "</command>"); ok {
+		return strings.TrimSpace(cmd)
+	}
+	inner := strings.TrimPrefix(t, "<user_shell_command>")
+	if i := strings.Index(inner, "</user_shell_command>"); i >= 0 {
+		inner = inner[:i]
+	}
+	inner = strings.TrimSpace(inner)
+	if i := strings.IndexByte(inner, '\n'); i >= 0 {
+		inner = inner[:i]
+	}
+	return strings.TrimSpace(inner)
+}
+
+func between(s, open, close string) (string, bool) {
+	i := strings.Index(s, open)
+	if i < 0 {
+		return "", false
+	}
+	rest := s[i+len(open):]
+	j := strings.Index(rest, close)
+	if j < 0 {
+		return "", false
+	}
+	return rest[:j], true
+}
+
+// turnBoundary records Codex's own task boundaries. The turn fields are decoded
+// here, from the raw payload, so a shape this adapter has not seen only means
+// the field is absent.
+func (p *parser) turnBoundary(kind string, raw json.RawMessage, ts time.Time) {
+	var te turnEvent
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &te)
+	}
+	end := len(p.tr.Events) - 1
+	switch kind {
+	case evtTaskStarted:
+		// A task that never said it ended is closed by the next one.
+		p.closeTurn(end, trace.TurnCompleted)
+		p.tr.Turns = append(p.tr.Turns, trace.RuntimeTurn{Start: len(p.tr.Events), End: -1})
+		p.openTurn = len(p.tr.Turns) - 1
+	case evtTaskComplete:
+		if p.openTurn >= 0 {
+			t := &p.tr.Turns[p.openTurn]
+			t.EndTime = ts
+			if d, ok := millis(te.DurationMS); ok {
+				t.Duration = d
+			}
+		}
+		status := trace.TurnCompleted
+		if marked(te.Error) {
+			status = trace.TurnFailed
+		}
+		p.closeTurn(end, status)
+	case evtTurnAborted:
+		status := trace.TurnCancelled
+		if stringOf(te.Reason) == "interrupted" {
+			status = trace.TurnInterrupted
+		}
+		p.closeTurn(end, status)
+	}
+	// A turn boundary separates responses: usage reported after it belongs to
+	// the next turn's response, never to an event from this one.
+	p.lastAssistant = -1
+}
+
+// closeTurn ends the open turn, if there is one, at event end.
+func (p *parser) closeTurn(end int, status trace.TurnStatus) {
+	if p.openTurn < 0 {
+		return
+	}
+	t := &p.tr.Turns[p.openTurn]
+	t.End = end
+	t.Status = status
+	p.openTurn = -1
 }
 
 // addReasoning records a reasoning summary as an assistant turn with a subtype.
@@ -567,6 +692,9 @@ func (p *parser) add(ev trace.Event, ts time.Time, lineNo int) int {
 // finish derives the per-request fields that need the whole timeline, and checks
 // the two figures Codex reports against each other.
 func (p *parser) finish() {
+	// A task still running when the file ends (a live session, a killed process)
+	// covers everything after its start; how it ended is unknown.
+	p.closeTurn(len(p.tr.Events)-1, trace.TurnCompleted)
 	if len(p.tr.Requests) > 0 && !p.lastTotal.empty() {
 		p.checkUsageDrift()
 	}
@@ -574,6 +702,7 @@ func (p *parser) finish() {
 		// Cache writes are genuinely absent, not zero. Saying so keeps the cache
 		// section from reading as "nothing was ever cached".
 		p.warn("Codex reports cache reads but not cache creation, so cache-write tokens are unavailable for this runtime")
+		p.tr.UnreportedUsage = []trace.UsageClass{trace.UsageCacheWrite}
 	}
 	if len(p.mcpUnclassified) > 0 {
 		names := sortedKeys(p.mcpUnclassified)
@@ -637,6 +766,7 @@ func (p *parser) checkUsageDrift() {
 	}
 	p.warn("per-turn token usage sums to %d but Codex reports %d cumulative (%.0f%% apart); per-request figures in this report may be incomplete",
 		summed, total, drift*100)
+	p.tr.UsageMismatch = true
 }
 
 func plural(n int, noun string) string {

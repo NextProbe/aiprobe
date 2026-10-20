@@ -66,6 +66,10 @@ type Options struct {
 	// an analysis history. Nil disables persistence: the server still works, it
 	// just recomputes every time and remembers nothing.
 	Store *store.Store
+	// NoPreviews turns question previews off on the local pages
+	// (--no-prompt-preview): report pages do not fetch them and
+	// /report/previews answers 404.
+	NoPreviews bool
 }
 
 // DefaultHost and DefaultPort are the server's defaults.
@@ -102,6 +106,10 @@ type Server struct {
 	// join one job instead of analysing everything twice. See progress.go.
 	jobMu sync.Mutex
 	jobs  map[overviewKey]*overviewJob
+
+	// previews holds question previews of recently opened sessions, in memory
+	// only. See previews.go.
+	previews previewCache
 }
 
 // Session is one analysable session in the picker.
@@ -166,9 +174,45 @@ func isLoopback(host string) bool {
 	return true
 }
 
+// literalLoopbackHost reports whether the request was addressed to this machine
+// by a literal name: localhost, a loopback IP, or the exact --host the server was
+// started with. No DNS lookup, unlike isLoopback: a DNS-rebinding page resolves
+// its own domain to 127.0.0.1, and a lookup here would let it in.
+//
+// Only the two routes the report page calls back to check this. The previews
+// route is the first here to return question text, and re-analysis starts work.
+func (s *Server) literalLoopbackHost(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.Host)
+	if err != nil {
+		host = strings.Trim(r.Host, "[]") // no port
+	}
+	if strings.EqualFold(host, "localhost") || strings.EqualFold(host, s.opts.Host) {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// sameOrigin rejects a cross-site POST. A browser always sends Origin on a POST
+// it makes from another page, and a same-origin fetch sends this server's own;
+// "null" or any other value is refused. A request with no Origin at all (curl, a
+// script on this machine) is allowed: it already has the access the server has.
+func sameOrigin(r *http.Request) bool {
+	values := r.Header.Values("Origin")
+	if len(values) == 0 {
+		return true
+	}
+	return len(values) == 1 && strings.EqualFold(values[0], "http://"+r.Host)
+}
+
 func (s *Server) routes() {
 	s.mux.HandleFunc("/", s.handleIndex)
 	s.mux.HandleFunc("/report", s.handleReport)
+	// The report page fetches previews after first paint, and POSTs to re-run an
+	// analysis that predates the questions section. Both answer only a literal
+	// loopback Host; see literalLoopbackHost.
+	s.mux.HandleFunc("/report/previews", s.handlePreviews)
+	s.mux.HandleFunc("/report/reanalyse", s.handleReanalyse)
 	s.mux.HandleFunc("/overview", s.handleOverview)
 	// The picker starts an aggregate here and polls the second route, so no request
 	// is held for the minutes a large session store takes.
@@ -269,6 +313,7 @@ func (s *Server) Refresh() {
 	s.sessions, s.searched = sessions, searched
 	s.mu.Unlock()
 	s.invalidateOverviews()
+	s.previews.clear()
 }
 
 // Sessions returns the current snapshot.
@@ -398,22 +443,71 @@ func (s *Server) find(id string) (Session, bool) {
 	return Session{}, false
 }
 
+// storeKey is how this server identifies a session's stored analysis: the
+// PutMeta and fingerprint analyse has always used, kept in one place so the
+// Sessions page, the History page, the preview cache and re-analysis agree with
+// it, Cursor's 0/0 fingerprint included. It needs no Store, so a server running
+// with --no-store can still fingerprint a session.
+func (s *Server) storeKey(sess Session) (store.PutMeta, string) {
+	meta := store.PutMetaFor(sess.Path, sessionLabel(sess))
+	return meta, store.Fingerprint(sess.Path, meta.SizeBytes, meta.ModTimeUnix, s.opts.Version)
+}
+
+// priceRef describes the price table this server analyses with, so a stored cost
+// priced with another currency or discount is flagged rather than silently
+// compared. Nil when pricing is off.
+func (s *Server) priceRef() *overview.PriceRef {
+	tab := s.opts.Analyzer.Pricing
+	if tab == nil {
+		return nil
+	}
+	return &overview.PriceRef{Currency: tab.Currency(), Discount: tab.Discount()}
+}
+
 // analyse returns the analysis for a session, reading it from the store when the
 // session has not changed since it was last analysed.
 //
 // Without this, opening a report, switching its language and pressing back each
 // cost a full parse and analysis of the transcript.
 func (s *Server) analyse(sess Session) (*analyzer.Result, error) {
+	return s.analyseWith(sess, false)
+}
+
+// analyseWith is analyse, optionally treating a stored analysis without the
+// questions section as stale.
+//
+// An aggregate asks for that (needQuestions): its ranking is built from every
+// session's questions, so a stored analysis from before they existed would put a
+// dash where the count belongs. Such an entry is re-analysed and the fresh result
+// replaces it under the same fingerprint, so the next aggregate reuses it and the
+// refresh happens once. A report page does not ask: it keeps the stored analysis
+// and offers to re-run it (reanalyse.go), because telling "older than this
+// section" from "has no questions" by the data alone is what made a server
+// re-analyse the same session on every request.
+//
+// Neither the --no-cost nor the --no-store path changes: without prices a stored
+// priced analysis is never served or replaced, and without a store nothing is
+// read or written.
+func (s *Server) analyseWith(sess Session, needQuestions bool) (*analyzer.Result, error) {
 	if st := s.opts.Store; st != nil && !sess.Demo {
-		meta := store.PutMetaFor(sess.Path, sessionLabel(sess))
-		fp := store.Fingerprint(sess.Path, meta.SizeBytes, meta.ModTimeUnix, s.opts.Version)
+		meta, fp := s.storeKey(sess)
 		// The version is in the fingerprint, so an entry from another build normally
 		// does not match at all. Stale is asked anyway because it states the intent
 		// that the fingerprint only happens to imply, and because two builds sharing
 		// a version string is exactly the case that went wrong.
 		if e, ok := st.Lookup(fp); ok && !e.Stale(s.opts.Version) {
-			if res, err := st.Result(e.ID); err == nil && s.usable(sess, res) {
-				return res, nil
+			if res, err := st.Result(e.ID); err == nil {
+				// --no-cost promises no money anywhere, and an analysis an earlier
+				// priced run stored would carry it into the questions panel, the
+				// embedded JSON and /download. Analyse afresh without prices and do
+				// not store the result: replacing the priced entry would erase the
+				// cost from the history for the sake of one unpriced visit.
+				if s.opts.Analyzer.Pricing == nil && res.Spend != nil {
+					return s.runAnalysis(sess)
+				}
+				if s.usable(sess, res) && (!needQuestions || res.Questions != nil) {
+					return res, nil
+				}
 			}
 			// A missing or unreadable file is not fatal, and neither is one that
 			// predates a section this build renders: fall through and re-analyse
@@ -561,21 +655,42 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	}
 	loc := s.resolveLocale(r)
 
+	// Taken before the analysis, like the previews route takes it before parsing:
+	// if the file changes in between, the page and the previews disagree on the
+	// key and the page keeps its fallback labels rather than mislabelling rows.
+	key := s.previewKey(sess)
 	res, err := s.analyse(sess)
 	if err != nil {
 		s.fail(w, r, http.StatusInternalServerError, err)
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	err = reporthtml.Render(w, res, reporthtml.Options{
+	opts := reporthtml.Options{
 		Locale:    loc,
 		EmbedJSON: true,
 		// The switcher links back to this same report in the other language.
 		LanguageHref: "/report?id=" + report.QueryEscape(id) + "&lang={locale}",
 		Nav:          htmlNav(s.nav(navReport, loc)),
-	})
-	if err != nil && s.opts.Log != nil {
+	}
+	if res.Questions != nil && !s.opts.NoPreviews {
+		// First paint carries no previews; the page asks for them afterwards, so
+		// a stored analysis opens without parsing the transcript.
+		opts.PreviewsHref = "/report/previews?id=" + report.QueryEscape(id)
+		opts.PreviewsKey = key
+		if res.Trace != nil {
+			// This request has just parsed the transcript, so the page's own
+			// request for previews can be answered from memory.
+			s.previews.put(sess.ID+"|"+key, analyzer.QuestionPreviews(res.Trace))
+		}
+	}
+	if res.Questions == nil && s.opts.Store != nil && !sess.Demo {
+		// A stored analysis from before the questions section. Only a click
+		// re-runs it: GET never rewrites what is stored.
+		opts.ReanalyseHref = "/report/reanalyse?id=" + report.QueryEscape(id)
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := reporthtml.Render(w, res, opts); err != nil && s.opts.Log != nil {
 		fmt.Fprintf(s.opts.Log, "render failed: %v\n", err)
 	}
 }

@@ -193,7 +193,7 @@ func Parse(r io.Reader, sourceName string) (*trace.Trace, error) {
 		ContextWindowSource: fmt.Sprintf("assumed %d token window; Kiro reports utilization as a percentage without stating the window size", DefaultContextWindowTokens),
 		RequestsInferred:    true,
 	}
-	p := &parser{tr: tr, callByID: map[string]int{}, subAgents: map[string]int{}}
+	p := &parser{tr: tr, callByID: map[string]int{}, subAgents: map[string]int{}, openTurn: -1}
 
 	br := bufio.NewReaderSize(r, 1<<20)
 	lineNo := 0
@@ -215,6 +215,7 @@ func Parse(r io.Reader, sourceName string) (*trace.Trace, error) {
 		return nil, ErrNoRecords
 	}
 	p.finish()
+	tr.Prompts = trace.PromptsClassified
 	return tr, nil
 }
 
@@ -249,6 +250,9 @@ type parser struct {
 	steeringDocs int
 	// subAgents counts subagent invocations by name.
 	subAgents map[string]int
+	// openTurn is the index in Trace.Turns of the turn between a turn_start and
+	// its turn_end, -1 outside one.
+	openTurn int
 }
 
 func (p *parser) warn(format string, args ...any) {
@@ -311,6 +315,7 @@ func (p *parser) consume(line string, lineNo int) {
 		ev := newEvent(trace.KindUserMessage, trace.CatMessages)
 		ev.Text = decodeContent(pl.Content)
 		ev.IsCompactSummary = true
+		ev.Origin = trace.OriginInjected
 		p.add(ev, ts, lineNo)
 	case typeSteeringInclusion:
 		p.addSteering(pl, ts, lineNo)
@@ -321,12 +326,15 @@ func (p *parser) consume(line string, lineNo int) {
 	case typeTurnStart, typeTurnEnd, typeSessionEvent,
 		typePendingInteraction, typeInteractionResolved:
 		// Control-plane records. They are part of the session but never part of
-		// the prompt, so they are dropped rather than counted as context.
+		// the prompt, so they are dropped rather than counted as context. The two
+		// turn records still delimit Kiro's own turns.
 		if pl.Type == typeTurnEnd {
 			p.pendingRequest = true
+			p.endTurn(pl, ts)
 		}
 		if pl.Type == typeTurnStart {
 			p.pendingRequest = true
+			p.startTurn()
 		}
 	case "":
 		p.tr.SkippedLines++
@@ -414,6 +422,9 @@ func (p *parser) addSubAgentStart(pl payload, ts time.Time, lineNo int) {
 	ev.Role = "assistant"
 	ev.Subtype = "sub_agent_start"
 	ev.Text = text
+	// The subagent's own requests are in its own session, not this one; no
+	// agent-class tool call precedes it, so this marker is the only evidence.
+	ev.SubagentStart = true
 	p.add(ev, ts, lineNo)
 	if pl.SubAgentName != "" {
 		p.subAgents[pl.SubAgentName]++
@@ -440,12 +451,44 @@ func (p *parser) addUser(pl payload, ts time.Time, lineNo int) {
 	ev := newEvent(trace.KindUserMessage, trace.CatMessages)
 	ev.Role = "user"
 	ev.Text = text
+	ev.Origin, ev.Display = classifyUser(pl, text)
 	if len(pl.Images) > 0 {
 		p.warn("a user turn attached %d image(s); image tokens are not visible in the transcript and are excluded from estimates", len(pl.Images))
 	}
 	p.add(ev, ts, lineNo)
 	// A user turn always starts a new LLM call.
 	p.pendingRequest = true
+}
+
+// classifyUser decides who wrote a user record (the first rule that matches
+// wins). Kiro writes steering, notifications, wake-ups and workflow
+// continuations into the user role and marks them; only an unmarked message
+// with something in it is the person's.
+func classifyUser(pl payload, text string) (trace.Origin, string) {
+	var km *kiroMeta
+	if pl.Meta != nil {
+		km = pl.Meta.Kiro
+	}
+	switch {
+	case km != nil && marked(km.SyntheticUserMessageReason):
+		return trace.OriginInjected, ""
+	case km != nil && marked(km.Notification):
+		return trace.OriginInjected, ""
+	}
+	// A source that is not a string reads as no source: treating it as injected
+	// would make every real prompt vanish if a release changed its shape.
+	if src := stringOf(pl.Source); src != "" && src != "chat" {
+		return trace.OriginInjected, ""
+	}
+	if strings.TrimSpace(text) == "" && len(pl.Images) == 0 && len(pl.Documents) == 0 && emptyJSON(pl.ContextItems) {
+		return trace.OriginInjected, ""
+	}
+	if km != nil {
+		if d := stringOf(km.DisplayText); d != "" {
+			return trace.OriginPrompt, d
+		}
+	}
+	return trace.OriginPrompt, text
 }
 
 func (p *parser) addAssistant(pl payload, ts time.Time, lineNo int) {
@@ -634,12 +677,79 @@ func (p *parser) addToolResult(pl payload, ts time.Time, lineNo int) {
 // addUsage records Kiro's billing summary. Note that this is credits, not
 // tokens: it is exact, but it cannot anchor a token attribution.
 func (p *parser) addUsage(pl payload, ts time.Time, lineNo int) {
+	amount := 0.0
 	for _, s := range pl.PromptTurnSummaries {
 		p.creditsTotal += s.Usage
+		amount += s.Usage
 		if p.creditsUnit == "" {
 			p.creditsUnit = s.Unit
 		}
 	}
+
+	// The same figure, kept on the turn it was charged for, so it reaches the
+	// question that started that turn.
+	if p.openTurn < 0 {
+		// A summary outside any turn becomes a turn of its own where it sits.
+		// It is never unplaced (Start < 0): that would read as a turn the
+		// transcript cannot locate.
+		end := len(p.tr.Events) - 1
+		start := end
+		if start < 0 {
+			start = 0
+		}
+		p.tr.Turns = append(p.tr.Turns, trace.RuntimeTurn{Start: start, End: end})
+		p.chargeTurn(len(p.tr.Turns)-1, pl, amount)
+		return
+	}
+	p.chargeTurn(p.openTurn, pl, amount)
+}
+
+// chargeTurn adds a usage summary to turn k.
+func (p *parser) chargeTurn(k int, pl payload, amount float64) {
+	t := &p.tr.Turns[k]
+	t.Charge = trace.KnownFloat(t.Charge.Or(0) + amount)
+	t.ReportedRequests += len(pl.RequestIDs)
+	if t.Status == trace.TurnCompleted {
+		switch pl.Status {
+		case "failed":
+			t.Status = trace.TurnFailed
+		case "aborted":
+			t.Status = trace.TurnCancelled
+		}
+	}
+}
+
+// startTurn opens a Kiro turn, closing one that never recorded its end.
+func (p *parser) startTurn() {
+	p.closeTurn()
+	p.tr.Turns = append(p.tr.Turns, trace.RuntimeTurn{Start: len(p.tr.Events), End: -1})
+	p.openTurn = len(p.tr.Turns) - 1
+}
+
+// endTurn closes the open turn. A cancelled or failed stop overrides what the
+// usage summary said; any other stop reason leaves the status as it is.
+func (p *parser) endTurn(pl payload, ts time.Time) {
+	if p.openTurn < 0 {
+		return
+	}
+	t := &p.tr.Turns[p.openTurn]
+	t.EndTime = ts
+	switch pl.StopReason {
+	case "cancelled":
+		t.Status = trace.TurnCancelled
+	case "error":
+		t.Status = trace.TurnFailed
+	}
+	p.closeTurn()
+}
+
+// closeTurn ends the open turn at the last event so far.
+func (p *parser) closeTurn() {
+	if p.openTurn < 0 {
+		return
+	}
+	p.tr.Turns[p.openTurn].End = len(p.tr.Events) - 1
+	p.openTurn = -1
 }
 
 // addMetadata records Kiro's context utilization samples, the only cross-check
@@ -661,6 +771,8 @@ func (p *parser) addMetadata(pl payload, ts time.Time, lineNo int) {
 
 // finish computes the derived per-request fields.
 func (p *parser) finish() {
+	// A turn still open at the end of the file covers everything after its start.
+	p.closeTurn()
 	p.tr.CostUnit = p.creditsUnit
 	p.tr.CostAmount = p.creditsTotal
 

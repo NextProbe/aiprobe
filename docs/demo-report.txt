@@ -129,7 +129,20 @@ $ aiprobe demo
    Estimated: the recoverable figure prices analyzer estimates, not billed
    tokens.
 
- 6  CONTEXT EFFICIENCY SCORE                       formula: docs/scoring.md 
+ 6  QUESTIONS                                       4 question(s) · by cost 
+────────────────────────────────────────────────────────────────────────────
+     Question                          Cost  Share Reqs Tools           Dur.
+  3  Try the reasoning model o…       $0.84    51%    1 Read              3s
+  4  I tightened the retry rul…       $0.43    26%    7 Bash×3 mcp…       2m
+  1  The payments worker is cr…       $0.21    13%    6 Read×4 Bas…       1m
+  2  Back. What did you find?         $0.17    10%    1                   0s
+  ──────────────────────────────────────────────────────────────────────────
+     Total                            $1.65   100%   15
+
+  Boundaries: reliable. Question boundaries come from the runtime's own
+  markers for who wrote each message.
+
+ 7  CONTEXT EFFICIENCY SCORE                       formula: docs/scoring.md 
 ────────────────────────────────────────────────────────────────────────────
   31/100  F   deterministic, no model involved
 
@@ -139,7 +152,7 @@ $ aiprobe demo
   Tool output efficiency     2/15  █░░░░░░░░░░░  38.4% of tool output came …
   Prefix stability           4/15  ██░░░░░░░░░░  77.3% of prompt tokens avo…
 
- 7  WHAT TO CHANGE                                            11 finding(s) 
+ 8  WHAT TO CHANGE                                            11 finding(s) 
 ────────────────────────────────────────────────────────────────────────────
 
  1. large files are read end to end when only part of them is…     ~135,721
