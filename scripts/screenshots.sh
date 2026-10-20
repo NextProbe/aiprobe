@@ -2,9 +2,9 @@
 # Screenshot generator (macOS / Linux).
 #
 # POSIX sibling of scripts/screenshots.ps1. Same inputs (bundled synthetic
-# demo session), same three outputs under docs/screenshots/. Nothing in this
-# script touches real user data, so it is safe to run and commit from any
-# machine.
+# demo session), same outputs: every PNG listed in docs/screenshots/README.md.
+# Nothing in this script touches real user data, so it is safe to run and
+# commit from any machine.
 #
 # Usage:
 #   bash scripts/screenshots.sh
@@ -47,13 +47,13 @@ find_browser() {
 browser=$(find_browser)
 echo "Using browser: $browser"
 
-# Build a fresh binary if needed.
+# Build a fresh binary. Always, not only when it is missing: a binary left
+# over from an older checkout renders the pages as they were, and nothing in
+# the images says so.
 binary="$repo_root/bin/aiprobe"
-if [ ! -x "$binary" ]; then
-  echo "Building bin/aiprobe..."
-  mkdir -p "$repo_root/bin"
-  go build -o "$binary" .
-fi
+echo "Building bin/aiprobe..."
+mkdir -p "$repo_root/bin"
+go build -o "$binary" .
 
 work=$(mktemp -d -t aiprobe-screenshots.XXXXXX)
 trap 'rm -rf "$work"' EXIT
@@ -84,6 +84,51 @@ shoot() {
 }
 
 url_of() { printf 'file://%s' "$1"; }
+
+# inject SRC DST TAB [ROW]: copy a saved page, undo the print-media rules (see
+# below) and add a script that opens tab TAB and, given ROW, expands the
+# question row whose toggle controls ROW.
+inject() {
+  python3 - "$@" <<'PY'
+import sys
+src, dst, tab = sys.argv[1], sys.argv[2], sys.argv[3]
+row = sys.argv[4] if len(sys.argv) > 4 else ""
+raw = open(src, "r", encoding="utf-8").read()
+style = (
+    "<style>\n"
+    "@media print {\n"
+    "  .tabs, .copy-row { display: flex !important; }\n"
+    "  .panel { display: none !important; }\n"
+    "  .panel.active { display: block !important; }\n"
+    "  body { background: var(--bg) !important; color: var(--fg) !important; }\n"
+    "}\n"
+    "</style>\n"
+)
+expand = ""
+if row:
+    expand = (
+        "    var row = document.querySelector('.q-toggle[aria-controls=\"" + row + "\"]');\n"
+        "    if (row) { row.click(); }\n"
+    )
+script = (
+    "<script>\n"
+    "(function () {\n"
+    "  function activate() {\n"
+    "    var tab = document.querySelector('.tab[data-target=\"" + tab + "\"]');\n"
+    "    if (tab) { tab.click(); }\n"
+    + expand +
+    "    window.scrollTo(0, 0);\n"
+    "  }\n"
+    "  if (document.readyState === 'loading') {\n"
+    "    document.addEventListener('DOMContentLoaded', function () { setTimeout(activate, 50); });\n"
+    "  } else { setTimeout(activate, 50); }\n"
+    "})();\n"
+    "</script>\n"
+)
+html = raw.replace("</head>", style + "</head>").replace("</body>", script + "</body>")
+open(dst, "w", encoding="utf-8").write("\ufeff" + html)
+PY
+}
 
 # ------------------------------------------------------------------ #
 # 1) terminal.png                                                    #
@@ -185,38 +230,56 @@ open(work + "/dashboard-hero-dark.html", "w", encoding="utf-8").write(bom + dark
 PY
 
 echo "Rendering dashboard-hero.png..."
-shoot "$out_dir/dashboard-hero.png" "$(url_of "$work/dashboard-hero.html")" 1280 900
+shoot "$out_dir/dashboard-hero.png" "$(url_of "$work/dashboard-hero.html")" 1280 950
 
 echo "Rendering dashboard-findings.png..."
-shoot "$out_dir/dashboard-findings.png" "$(url_of "$work/dashboard-findings.html")" 1280 1600 1500
+shoot "$out_dir/dashboard-findings.png" "$(url_of "$work/dashboard-findings.html")" 1280 1650 1500
 
 echo "Rendering dashboard-cache.png..."
-shoot "$out_dir/dashboard-cache.png" "$(url_of "$work/dashboard-cache.html")" 1280 1400 1500
+shoot "$out_dir/dashboard-cache.png" "$(url_of "$work/dashboard-cache.html")" 1280 1450 1500
 
 echo "Rendering dashboard-mcp.png..."
-shoot "$out_dir/dashboard-mcp.png" "$(url_of "$work/dashboard-mcp.html")" 1280 1400 1500
+shoot "$out_dir/dashboard-mcp.png" "$(url_of "$work/dashboard-mcp.html")" 1280 1450 1500
 
 echo "Rendering dashboard-dup.png..."
-shoot "$out_dir/dashboard-dup.png" "$(url_of "$work/dashboard-dup.html")" 1280 1400 1500
+shoot "$out_dir/dashboard-dup.png" "$(url_of "$work/dashboard-dup.html")" 1280 1450 1500
 
 echo "Rendering dashboard-score.png..."
-shoot "$out_dir/dashboard-score.png" "$(url_of "$work/dashboard-score.html")" 1280 1200 1500
+shoot "$out_dir/dashboard-score.png" "$(url_of "$work/dashboard-score.html")" 1280 1250 1500
 
 echo "Rendering dashboard-hero-dark.png..."
-shoot "$out_dir/dashboard-hero-dark.png" "$(url_of "$work/dashboard-hero-dark.html")" 1280 900
+shoot "$out_dir/dashboard-hero-dark.png" "$(url_of "$work/dashboard-hero-dark.html")" 1280 950
 
 # Sweep the older experiment file.
 rm -f "$out_dir/dashboard-hero-light.png"
 
 # ------------------------------------------------------------------ #
-# 6) serve-sessions.png (the local web interface)                    #
+# 6) dashboard-questions.png / dashboard-questions-zh.png            #
+# ------------------------------------------------------------------ #
+# The Questions panel with question 4 expanded to its requests. A file
+# carries question previews only when asked, so this report is written
+# with --prompt-preview; the demo's questions are synthetic, so nothing
+# real can appear in them.
+for lang in en zh; do
+  name=dashboard-questions.png
+  [ "$lang" = zh ] && name=dashboard-questions-zh.png
+  "$binary" demo --html --prompt-preview --lang "$lang" -o "$work/questions-$lang.raw.html"
+  inject "$work/questions-$lang.raw.html" "$work/questions-$lang.html" panel-questions qd-4
+  echo "Rendering $name..."
+  shoot "$out_dir/$name" "$(url_of "$work/questions-$lang.html")" 1280 1760 1500
+done
+
+# ------------------------------------------------------------------ #
+# 7) serve-*.png (the local web interface)                           #
 # ------------------------------------------------------------------ #
 # `aiprobe serve` renders real sessions, so screenshotting it as-is
 # would leak private information. We sandbox the server: fresh env
 # vars redirect $HOME and every runtime to a scratch directory that
 # holds one fake Claude Code project containing the bundled demo
-# session. The result is a serve page whose only content is the same
-# synthetic session everything else uses.
+# session, plus two shorter sessions cut from it at question
+# boundaries so the cost ranking has something to rank. The result is
+# a serve page whose only content is the same synthetic data
+# everything else uses.
 #
 # The sandbox lives at /tmp/aiprobe-screenshots (not inside $HOME) so
 # the Runtimes page's rendered directory does not leak the developer's
@@ -229,6 +292,20 @@ mkdir -p "$fake_project"
 cp "$repo_root/internal/demo/testdata/demo-session.jsonl" \
    "$fake_project/9f3c71d2-4e8a-4c15-b7a0-2d6ef1a90b34.jsonl"
 
+# The two cuts: the first N lines of the demo transcript under a new
+# session id and title.
+cut_session() {
+  head -n "$2" "$repo_root/internal/demo/testdata/demo-session.jsonl" \
+    | sed -e "s/9f3c71d2-4e8a-4c15-b7a0-2d6ef1a90b34/$1/g" \
+          -e "s/Debug duplicate payment authorizations in orders-api/$3/g" \
+    > "$fake_project/$1.jsonl"
+}
+cut_session 5e0b8a14-2f6c-4d3a-9b71-c8e2f4a6d019 18 'Find where the duplicate authorizations come from'
+cut_session b7d2c9e3-8a41-4f05-a6e8-31f9c0b5e7a2 21 'Try the payments fix on the reasoning model'
+
+# No --no-store: the Sessions page reads each session's cost and
+# questions from the store, and with $HOME redirected that store is
+# inside the sandbox, which is deleted on exit.
 port=17777
 (
     HOME="$sandbox" \
@@ -236,7 +313,7 @@ port=17777
     KIRO_CONFIG_DIR="$sandbox/.kiro" \
     CURSOR_CONFIG_DIR="$sandbox/.cursor" \
     CODEX_HOME="$sandbox/.codex" \
-    "$binary" serve --port "$port" --quiet --no-store &
+    "$binary" serve --port "$port" --quiet &
     echo $! > "$work/serve.pid"
     wait
 ) &
@@ -264,6 +341,11 @@ if [ "$ready" != 1 ]; then
     exit 1
 fi
 
+# Analyse every sandbox session once, through the aggregate the Sessions
+# page's "Cost ranking" button opens. GET /overview waits for the job, and
+# the analyses land in the sandbox's store.
+curl -sSf -o /dev/null --max-time 120 "http://127.0.0.1:$port/overview?adapter=all&lang=en"
+
 echo "Rendering serve-sessions.png..."
 shoot "$out_dir/serve-sessions.png" "http://127.0.0.1:$port/?lang=en" 1280 900
 
@@ -272,6 +354,20 @@ shoot "$out_dir/serve-runtimes.png" "http://127.0.0.1:$port/runtimes?lang=en" 12
 
 echo "Rendering serve-sessions-zh.png..."
 shoot "$out_dir/serve-sessions-zh.png" "http://127.0.0.1:$port/?lang=zh" 1280 900
+
+# The cost ranking, as the aggregate page shows it. Opened by URL,
+# #panel-ranking scrolls the page to the panel and headless Chrome
+# captures it half painted, so the page is saved and gets the same
+# tab-clicking treatment as the dashboard images instead.
+for lang in en zh; do
+  name=serve-ranking.png
+  [ "$lang" = zh ] && name=serve-ranking-zh.png
+  curl -sSf --max-time 120 -o "$work/serve-ranking-$lang.raw.html" \
+    "http://127.0.0.1:$port/overview?adapter=all&lang=$lang"
+  inject "$work/serve-ranking-$lang.raw.html" "$work/serve-ranking-$lang.html" panel-ranking
+  echo "Rendering $name..."
+  shoot "$out_dir/$name" "$(url_of "$work/serve-ranking-$lang.html")" 1280 1240 1500
+done
 
 echo
 echo "Done. Screenshots:"

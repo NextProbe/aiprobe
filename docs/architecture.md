@@ -108,6 +108,23 @@ keeps `unknown` from quietly becoming a plausible zero somewhere between the
 analyzer and the JSON. If you find yourself unwrapping one with `.Or(0)` for
 anything other than a bar-chart width, that is usually a bug.
 
+### Who wrote each message
+
+The questions section splits a session at every message a person wrote, and only an
+adapter can tell those apart from what the runtime, a hook or a workflow put into
+the conversation. So the classification travels in the trace, and no analyzer reads
+message text to decide:
+
+| Field | What it says |
+| --- | --- |
+| `Trace.Prompts` | Whether the adapter classified its user-role events (`classified`), or the prompts are absent from what was read (`missing`, as for a Kiro CLI session rebuilt from its sidecar alone). Anything else means the split is unavailable and the whole session is one bucket. |
+| `Event.Origin` | For a user-role event: `prompt`, `command` (a slash command) and `shell` were typed by a person and open a question; `preamble` is the wrapper a runtime writes in front of every prompt (Claude Code's `<local-command-caveat>`, Codex's `<environment_context>`); `injected` is everything else, from tool results to reminders, hook output, steering and compaction summaries. |
+| `Event.Display` | What a person would recognise, for the one-line preview: injected wrappers removed, a slash command as `/name args`, never command output. Never serialized. |
+| `Event.Signal` | An interruption or a failed turn the runtime recorded. Set independently of `Origin`, and attributed to the question it happened in. |
+| `Event.SubagentStart` | A subagent started here whose requests this transcript does not contain. |
+| `Trace.Turns` | The runtime's own turns (`RuntimeTurn`), where it records them: the event range, status, duration and, for a runtime that bills in its own units, the turn's charge. `Start = -1` means the turn could not be placed in the transcript and its counts sit on a request chosen by position. |
+| `Trace.UnreportedUsage`, `UsageMismatch`, `UnreadableUserRecords`, `CreditsUnavailable` | A usage class the runtime never reports (Codex has no cache-write counter), per-request usage that does not add up to the runtime's own running total, user records that could not be decoded, and why credits are unknown. Each lowers the split's reliability or explains a dash, rather than reading as zero. |
+
 ## Adapters
 
 `adapters.Detect` identifies the runtime structurally rather than by filename
@@ -176,6 +193,47 @@ they do not need a provider total to be true.
 
 The trace model has to make all five honest, which is why capabilities are data rather
 than `if adapter == "kiro"` scattered through the analyzers.
+
+**Who wrote each message is the adapter's call.** Each applies its own rules, first
+match wins, and records the answer as `Event.Origin`:
+
+- *Claude Code:* tool results, `isMeta` records, compaction summaries and injected
+  wrappers are injected. Text that *starts* with `<command-name>` or
+  `<command-message>` is a slash command (a tag in the middle of a prompt is still a
+  prompt), `<bash-input>` is a shell command, and `[Request interrupted by user]` is
+  a signal on the question it interrupted. A queued prompt (a `queued_command`
+  attachment) opens a question where it was delivered. A transcript that is all
+  sidechain records is a subagent's own, so its first user message opens question 1.
+  One API response written as several lines, one per content block, is one request:
+  lines sharing `message.id` (or, without one, `requestId`) are merged. Later lines
+  still add their events and tool calls to that request, a later line whose usage
+  differs replaces the stored usage, and the first line's event anchors it. Earlier
+  builds counted every line as a request, so affected sessions show roughly half the
+  requests, billed input and cost they used to.
+- *Codex:* `<environment_context>`, `<user_instructions>` and AGENTS.md
+  instructions are preamble; `<turn_aborted>` is injected and interrupts the question
+  before it; `<user_shell_command>` is a shell command; a role other than user,
+  assistant, system or developer is injected. `task_started`, `task_complete` and
+  `turn_aborted` become runtime turns, and the assistant a `token_count` would attach
+  to is reset at each turn boundary, so a request after an aborted turn does not land
+  on the turn before it.
+- *Kiro:* a user message from steering, one carrying a `_meta.kiro` notification or
+  synthetic reason, or one with only context items is injected. `turn_start`,
+  `usage_summary` and `turn_end` become runtime turns with their credits.
+- *Kiro CLI:* every `Prompt` record is a prompt. The sidecar's turns become runtime
+  turns, placed by `message_ids`, then `result.Ok.ID`, else `Start = -1` — the same
+  order the token counts are placed by, so "unplaced" means exactly "counts on a
+  guessed request".
+- *Cursor:* a user bubble with text is a prompt, an empty one is injected.
+
+New transcript fields are read as `json.RawMessage` and decoded only in the branch
+that needs them, so a field of an unexpected shape counts as missing instead of
+costing the whole line. Several of these branches have not been observed on real
+sessions here (Claude Code's `<bash-input>`, the interruption variants and old-format
+system commands; Codex's `turn_aborted` and its two wrappers; every Kiro CLI rule)
+and follow the format's code and synthetic samples. The standing limitation is that a
+marker a runtime starts writing tomorrow reads as a person's prompt until a rule is
+added for it; the reliability line is where that would first show.
 
 ## Token estimation, and keeping it honest
 
@@ -264,6 +322,46 @@ confidence. No model is involved.
 **`score`** is a published formula over five components, with unevaluable
 components reported as unknown and their weight redistributed rather than scored
 as zero. See [scoring.md](scoring.md).
+
+**`questions`** (`internal/analyzer/questions.go`) splits the session at the events
+whose `Origin` opens a question and assigns every request, tool call and event to
+exactly one segment: question 1..n, `before_first` (everything before the first
+question) or `unattributed` (runtime turns that could not be placed). A request goes
+where its anchoring event is; when that index points at the next event still to be
+added, it goes with the one before, so a Codex response holding only a
+`function_call` stays with the question that asked for it. Signals belong to the
+question they happened in, and a runtime turn to the question of its first request.
+
+With provider counters each request is priced on its own, from a `RateCard` looked
+up once per model, and a question's cost is the sum of its requests. Without them
+the session's modelled cache writes and reads are apportioned by the
+largest-remainder method on two weights recorded by the context breakdown in the
+same pass (`Attribution`): a question's writes weigh the context its requests sent
+for the first time plus the one-off content they were charged for, its reads the
+context they sent again. Writes therefore land where the content was first sent, as
+a provider would bill them, and a segment with no requests gets no modelled cost.
+Credits are split by runtime turn when the runtime records a charge per turn, shown
+as a floor (`≥`) for a question with a turn that reported none, and kept at the
+session level when only a session total exists.
+
+Where the runtime charged each turn and the session's credits are above zero
+(`billedPerTurn`), the default order and every share are taken in credits: they are
+the bill, and the dollar figure beside them is AIProbe's estimate at list prices,
+modelled outright when there are no counters. Otherwise the order is cost, then
+context exposure, and shares follow the same basis. The basis belongs to the session,
+so `--sort` reorders the rows without changing what a share is a share of.
+
+The invariants all hold inside this one function: every request in exactly one
+segment; token classes, costs and credits that sum to the session's own totals
+(integers exactly, money to within 1e-9 relative); shares that sum to 1. A
+reconciliation pass checks them afterwards, re-apportions an integer class that does
+not add up, and says so with `questions.note.reconciled`, which is a bug report
+rather than a caveat. Everything downstream copies: renderers format, and
+`SummaryOf` is the one function that turns a result into the session cost row the
+ranking and the store index carry. A reliability verdict with its reason travels
+with the split: skipped lines, unreadable user records, a usage mismatch, unplaced
+runtime turns (`turns_unplaced`, with the count), an adapter that does not
+classify, or prompts that are absent from what was read.
 
 ## Turning tokens into money
 
@@ -380,6 +478,22 @@ different currency labels is **not** summed, because converting between currenci
 needs a rate the tool has no honest way to obtain, so the differently-denominated
 sessions count as unpriced and the report says so.
 
+The cost ranking (`Report.Ranking`) lists every session the aggregate covered,
+regardless of `--top`. Each row's figures are the session's own cost row from
+`analyzer.SummaryOf`, copied rather than recomputed, so a row always equals that
+session's report, and `SortRanking` is the one comparator every surface uses. Its
+default, `DefaultRankingSort`, is credits for a set from one runtime with a session
+charged per turn, since those credits are what that runtime billed and the order then
+matches each session's own questions; otherwise money when any session has a
+comparable cost, else credits, else context exposure. A set mixing runtimes has no
+common unit but money, so it stays on cost, and `RankingModelled` has the renderers
+say beside the table that the `~` amounts on per-turn rows are estimates, whatever the
+order. A row priced in another currency or at another discount than the caller's
+`PriceRef` is marked and not ranked by cost against the others; with pricing off the
+rows carry no money at all. Session titles are scrubbed once per session (credentials redacted,
+control characters removed, 80 runes at most) and the same string is used by the
+ranking, the worst-sessions table and the finding examples.
+
 The aggregate is the only thing the local server caches, because it is the only
 thing that parses every session rather than one. The cache key is the runtime plus
 a fingerprint of the session set, and it is deliberately **not** keyed on language:
@@ -447,7 +561,7 @@ into a guarantee of doing the slow thing forever.
 
 ```
 ~/.aiprobe/
-├── index.json            one record per analysis: identity, timing, headline figures
+├── index.json            one record per analysis: identity, timing, headline figures, cost row
 └── analyses/<id>.json     the full report, byte-identical to `--json`
 ```
 
@@ -455,7 +569,30 @@ into a guarantee of doing the slow thing forever.
 to open several hundred files. The analysis files themselves go through
 `report.WriteJSON`, the same function `--json` uses, so there is no second
 serialization format to keep in step and no stored document that a reader of the
-JSON report cannot already parse.
+JSON report cannot already parse. `WriteJSON` drops question previews
+unconditionally, which is why nothing in the store ever holds one.
+
+Each record also carries `summary`, the session's cost row from
+`analyzer.SummaryOf`, so the server's Sessions and History pages show cost, credits
+and question count from the index alone, without opening a stored report or parsing
+a transcript. A record written before it existed has none, and those pages say so as
+"— (earlier version)", told apart from "— (older analysis)" (the session's
+`SessionKey` has entries, but none for this file as it is now and this build) and
+"— (not analysed)". `history --json` leaves it out, so that output is unchanged.
+
+Two cases the questions section added. A stored analysis from before it, under the
+same version string, is still reused, because `usable` does not look at it: telling
+"older than this section" from "this session has no questions" by the data alone is
+how a server re-analyses the same session on every request. The report page says so
+instead and offers a button that POSTs to `/report/reanalyse`. The one-click
+aggregate is the exception, because it was asked for every session's questions:
+`analyseWith(sess, true)` treats a stored analysis without them as stale and replaces
+it under the same fingerprint, so the refresh happens once and the next aggregate
+reuses the result. The CLI `overview` never reads the store, so it has nothing to
+refresh. And `serve --no-cost` does not reuse a stored analysis that carries a
+cost, since showing it would put money on a page that promised none: it analyses
+afresh without prices and does not write the result back, so a priced history entry
+is not erased by one unpriced visit.
 
 ### Identity: what makes a cache hit, and what makes a trend
 
