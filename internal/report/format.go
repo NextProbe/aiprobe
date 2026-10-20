@@ -8,9 +8,10 @@ package report
 
 import (
 	"fmt"
-	"github.com/NextProbe/aiprobe/internal/pathutil"
 	"strings"
 	"time"
+
+	"github.com/NextProbe/aiprobe/internal/pathutil"
 
 	"github.com/NextProbe/aiprobe/internal/i18n"
 	"github.com/NextProbe/aiprobe/internal/trace"
@@ -246,6 +247,17 @@ func PadLeftCells(s string, width int) string {
 		return ClipCells(s, width)
 	}
 	return strings.Repeat(" ", width-n) + s
+}
+
+// TipIfWider returns s when its display width exceeds cells, else "". Pages use
+// it for the title attribute of text the stylesheet may cut short with an
+// ellipsis: text that fits needs no tooltip, and carrying it twice only makes
+// the page heavier.
+func TipIfWider(s string, cells int) string {
+	if WidthCells(s) > cells {
+		return s
+	}
+	return ""
 }
 
 // ClipCells truncates s to a display width, with an ellipsis.

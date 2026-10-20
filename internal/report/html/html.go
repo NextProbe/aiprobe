@@ -29,7 +29,7 @@ import (
 	"github.com/NextProbe/aiprobe/internal/trace"
 )
 
-//go:embed template.gohtml overview.gohtml style.css app.js
+//go:embed template.gohtml overview.gohtml style.css app.js live.js
 var assets embed.FS
 
 // Options controls rendering.
@@ -52,6 +52,22 @@ type Options struct {
 	// server supplies it: a standalone file has nowhere to navigate to, and a
 	// dead nav bar is worse than none.
 	Nav []NavLink
+
+	// Sort is the initial order of the questions table; SortAuto uses
+	// Questions.DefaultSort. Readers can re-sort by clicking a header.
+	Sort analyzer.SortKey
+	// Previews are written into the questions table when non-nil (--prompt-preview).
+	Previews map[int]string
+	// PreviewsHref, set only by the local server, is fetched by the page to fill
+	// previews in after first paint. Never set for a file.
+	PreviewsHref string
+	// PreviewsKey, set only by the local server alongside PreviewsHref, is the
+	// session fingerprint the page was rendered from. The page applies a preview
+	// response only when the response carries the same key.
+	PreviewsKey string
+	// ReanalyseHref, set only by the local server, is where the page POSTs to
+	// re-run an analysis that predates the questions section. Never set for a file.
+	ReanalyseHref string
 }
 
 // NavLink is one entry in the site navigation.
@@ -94,6 +110,19 @@ type view struct {
 	JSONText template.JS
 	HasJSON  bool
 
+	// Sort is the initial order of the questions table.
+	Sort analyzer.SortKey
+
+	// PreviewsHref, PreviewsKey and ReanalyseHref are copied from Options. The
+	// privacy card reads them too, so what the page says about its requests and
+	// whether it makes any are decided by the same fields.
+	PreviewsHref  string
+	PreviewsKey   string
+	ReanalyseHref string
+	// LiveJS is the script that fetches previews and re-runs an analysis. Empty
+	// unless one of the two links is set, so a file never carries a fetch.
+	LiveJS template.JS
+
 	// TotalDriftCauses is precomputed for the cause table's bar scaling.
 	MaxCauseTokens int
 	MaxToolTokens  int
@@ -111,6 +140,9 @@ type localeOption struct {
 
 // Render writes the dashboard.
 func Render(w io.Writer, res *analyzer.Result, opts Options) error {
+	// First, so the table and the embedded JSON carry the same previews: exactly
+	// the ones asked for, and none by default, whatever res was loaded with.
+	res = report.WithPreviews(res, opts.Previews)
 	loc := opts.Locale
 	if !i18n.Supported(loc) {
 		loc = i18n.Default
@@ -146,6 +178,17 @@ func Render(w io.Writer, res *analyzer.Result, opts Options) error {
 		BreakdownBar:  breakdownBarSVG(p, res.Breakdown.Categories),
 		CacheChart:    cacheChartSVG(p, res.Cache.Turns),
 		HitRatioChart: hitRatioBarsSVG(p, res.Cache.Turns),
+		Sort:          opts.Sort,
+		PreviewsHref:  opts.PreviewsHref,
+		PreviewsKey:   opts.PreviewsKey,
+		ReanalyseHref: opts.ReanalyseHref,
+	}
+	if opts.PreviewsHref != "" || opts.ReanalyseHref != "" {
+		live, err := assets.ReadFile("live.js")
+		if err != nil {
+			return err
+		}
+		v.LiveJS = template.JS(live)
 	}
 	for _, c := range res.Cache.CauseTotals {
 		if c.MissedTokens > v.MaxCauseTokens {
@@ -214,6 +257,14 @@ func localeOptions(current i18n.Locale, hrefTemplate string) []localeOption {
 }
 
 func funcMap(p *i18n.Printer) template.FuncMap {
+	m := baseFuncs(p)
+	for k, f := range questionFuncs(p) {
+		m[k] = f
+	}
+	return m
+}
+
+func baseFuncs(p *i18n.Printer) template.FuncMap {
 	return template.FuncMap{
 		// T looks up a message with no arguments.
 		"T": p.S,

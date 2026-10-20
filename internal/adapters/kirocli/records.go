@@ -194,6 +194,59 @@ func decodeContent(raw json.RawMessage) string {
 	return ""
 }
 
+// promptText reads only the text items of a prompt's content: what the person
+// typed, without the attachments decodeContent serialises alongside it so their
+// weight is counted. A prompt with no text item reads as "" (attachments only).
+func promptText(raw json.RawMessage) string {
+	s := strings.TrimSpace(string(raw))
+	if s == "" || s == "null" {
+		return ""
+	}
+	switch s[0] {
+	case '"':
+		var str string
+		if err := json.Unmarshal(raw, &str); err == nil {
+			return str
+		}
+	case '[':
+		var items []contentItem
+		if err := json.Unmarshal(raw, &items); err == nil {
+			parts := make([]string, 0, len(items))
+			for _, it := range items {
+				if t := it.textItem(); t != "" {
+					parts = append(parts, t)
+				}
+			}
+			return strings.Join(parts, "\n")
+		}
+		var strs []string
+		if err := json.Unmarshal(raw, &strs); err == nil {
+			return strings.Join(strs, "\n")
+		}
+	case '{':
+		var it contentItem
+		if err := json.Unmarshal(raw, &it); err == nil {
+			return it.textItem()
+		}
+	}
+	return ""
+}
+
+// textItem is the string body of a text item, and "" for any other item.
+func (it contentItem) textItem() string {
+	if it.Kind != "text" && it.Type != "text" {
+		return ""
+	}
+	if it.Text != "" {
+		return it.Text
+	}
+	var s string
+	if err := json.Unmarshal(it.Data, &s); err == nil {
+		return s
+	}
+	return ""
+}
+
 // text pulls the body out of one content item, tolerating both the CLI's
 // kind/data convention and the more common type/text one.
 func (it contentItem) text() string {

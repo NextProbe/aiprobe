@@ -190,8 +190,8 @@ func buildSpend(tr *trace.Trace, h Headline, insertedTokens int, tab *pricing.Ta
 		// cache reads. On a real session that is 99.8% reads, which is why pricing
 		// the lot at the uncached rate — the first version of this — overstated the
 		// bill by a factor of ten.
-		model := ceilingModel(tr)
-		if model == "" {
+		model, usage, ok := modelledSplit(tr, h.TotalContextTokens, insertedTokens)
+		if !ok {
 			s.Reason = reasonFor(tr)
 			s.Total.Currency = s.Currency
 			s.Recoverable.Currency = s.Currency
@@ -199,7 +199,7 @@ func buildSpend(tr *trace.Trace, h Headline, insertedTokens int, tab *pricing.Ta
 		}
 		s.Modelled = true
 		buckets[model] = &bucket{
-			usage:    modelledUsage(h.TotalContextTokens, insertedTokens),
+			usage:    usage,
 			requests: len(tr.Requests),
 		}
 		order = append(order, model)
@@ -328,6 +328,21 @@ func buildSpend(tr *trace.Trace, h Headline, insertedTokens int, tab *pricing.Ta
 		}
 	}
 	return s
+}
+
+// modelledSplit is the cache-write / cache-read split buildSpend prices for a
+// session whose runtime reports no usage counters. It needs no price table, so
+// the questions section shows the same token classes with and without --no-cost.
+// ok is false when the session is not modelled: it has counters, or it names no
+// model to price at.
+func modelledSplit(tr *trace.Trace, cumulative, inserted int) (model string, u trace.Usage, ok bool) {
+	if tr.HasUsage() {
+		return "", trace.Usage{}, false
+	}
+	if model = ceilingModel(tr); model == "" {
+		return "", trace.Usage{}, false
+	}
+	return model, modelledUsage(cumulative, inserted), true
 }
 
 // modelledUsage splits an estimated cumulative context into the two classes it was

@@ -5,13 +5,17 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/NextProbe/aiprobe/internal/adapters"
+	"github.com/NextProbe/aiprobe/internal/analyzer"
 	"github.com/NextProbe/aiprobe/internal/i18n"
+	"github.com/NextProbe/aiprobe/internal/redact"
 	"github.com/NextProbe/aiprobe/internal/report"
 	reporthtml "github.com/NextProbe/aiprobe/internal/report/html"
+	"github.com/NextProbe/aiprobe/internal/store"
 )
 
 // indexView is the session picker's data model.
@@ -19,9 +23,16 @@ type indexView struct {
 	Locale   i18n.Locale
 	Lang     string
 	Locales  []langLink
-	Sessions []Session
+	Sessions []sessionRow
 	Searched []string
 	Nav      []navLink
+	// ShowStored adds the cost, credits and questions columns. Off without a
+	// store: every row would then read "not analysed", which says nothing.
+	ShowStored bool
+	// ShowCost keeps the cost column, which --no-cost drops.
+	ShowCost bool
+	// CostDiffers adds the note that explains a ≠ on any row.
+	CostDiffers bool
 	// ThemeJS and ThemeToggle come from the report package so all four page
 	// types share one implementation of the theme control.
 	ThemeJS     template.JS
@@ -42,12 +53,64 @@ type langLink struct {
 	Href     string
 }
 
+// sessionRow is one session in the picker, with what the store already knows
+// about its cost. Session is embedded so the template reads .Title, .ID and the
+// rest as before.
+type sessionRow struct {
+	Session
+	// Analysed is true when the store holds an analysis of the file as it is now,
+	// by this build.
+	Analysed bool
+	// Summary is that analysis's cost row, copied from the index. Nil for an
+	// entry written before the index carried it, which the page shows as "—".
+	Summary *analyzer.CostSummary
+	// Legacy marks an analysis of the file as it is now that predates the
+	// questions section (no Summary, or a Legacy one): the page says "earlier
+	// version" rather than showing an unknown count or calling it unanalysed.
+	Legacy bool
+	// Outdated marks a session with no analysis of its current bytes by this
+	// build, but with one of an earlier state of the file or by another build.
+	// It is not "not analysed": the page says "older analysis".
+	Outdated bool
+	// PricingDiffers marks a stored cost priced with another currency or
+	// discount than this server uses.
+	PricingDiffers bool
+}
+
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		s.fail(w, r, http.StatusNotFound, fmt.Errorf("no such page: %s", r.URL.Path))
 		return
 	}
 	loc := s.resolveLocale(r)
+	v := s.indexViewFor(loc)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	s.renderIndex(w, loc, v)
+}
+
+// fail renders an error through the same page, so a problem is readable in the
+// browser instead of only in the terminal.
+func (s *Server) fail(w http.ResponseWriter, r *http.Request, status int, err error) {
+	loc := s.resolveLocale(r)
+	if s.opts.Log != nil {
+		fmt.Fprintf(s.opts.Log, "error %d: %v\n", status, err)
+	}
+	v := s.indexViewFor(loc)
+	v.Error = err.Error()
+	v.Status = status
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	s.renderIndex(w, loc, v)
+}
+
+// indexViewFor builds the picker's model, for the page itself and for the error
+// page that reuses it.
+//
+// The stored columns come from the store's in-memory index and one stat per
+// session (through storeKey, the same key analyse uses). Nothing here parses a
+// transcript, runs an analysis, reads a stored report or writes the index, so the
+// page stays instant however long the history is.
+func (s *Server) indexViewFor(loc i18n.Locale) indexView {
 	s.mu.RLock()
 	sessions, searched := s.sessions, s.searched
 	s.mu.RUnlock()
@@ -60,43 +123,50 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		Nav:           s.nav(navSessions, loc),
 		ThemeJS:       reporthtml.ThemeJS(),
 		ThemeToggle:   themeToggle(loc),
-		Sessions:      sessions,
 		Searched:      searched,
 		Runtimes:      groups,
 		TotalSessions: totalOf(groups),
+		ShowStored:    s.opts.Store != nil,
+		ShowCost:      s.opts.Store != nil && s.opts.Analyzer.Pricing != nil,
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	s.renderIndex(w, loc, v)
-}
 
-// fail renders an error through the same page, so a problem is readable in the
-// browser instead of only in the terminal.
-func (s *Server) fail(w http.ResponseWriter, r *http.Request, status int, err error) {
-	loc := s.resolveLocale(r)
-	s.mu.RLock()
-	sessions, searched := s.sessions, s.searched
-	s.mu.RUnlock()
-
-	if s.opts.Log != nil {
-		fmt.Fprintf(s.opts.Log, "error %d: %v\n", status, err)
+	var stored map[string]store.Entry
+	// bySession holds every session the store has any analysis of, current or
+	// not, so a session analysed before its file changed (or by another build)
+	// is not shown as never analysed.
+	var bySession map[string]bool
+	if st := s.opts.Store; st != nil {
+		entries := st.List(0)
+		stored = make(map[string]store.Entry, len(entries))
+		bySession = make(map[string]bool, len(entries))
+		for _, e := range entries {
+			if _, dup := stored[e.Fingerprint]; !dup {
+				stored[e.Fingerprint] = e
+			}
+			bySession[e.SessionKey] = true
+		}
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(status)
-	groups := s.RuntimeGroups()
-	s.renderIndex(w, loc, indexView{
-		Locale:        loc,
-		Lang:          langTag(loc),
-		Locales:       langLinks(loc, "/?lang={locale}"),
-		Nav:           s.nav(navSessions, loc),
-		ThemeJS:       reporthtml.ThemeJS(),
-		ThemeToggle:   themeToggle(loc),
-		Sessions:      sessions,
-		Searched:      searched,
-		Runtimes:      groups,
-		TotalSessions: totalOf(groups),
-		Error:         err.Error(),
-		Status:        status,
-	})
+	ref := s.priceRef()
+	v.Sessions = make([]sessionRow, 0, len(sessions))
+	for _, sess := range sessions {
+		row := sessionRow{Session: sess}
+		if stored != nil && !sess.Demo {
+			_, fp := s.storeKey(sess)
+			if e, ok := stored[fp]; ok && !e.Stale(s.opts.Version) {
+				row.Analysed = true
+				row.Summary = e.Summary
+				row.Legacy = e.Summary == nil || e.Summary.Legacy
+				if e.Summary != nil && ref.Differs(*e.Summary) {
+					row.PricingDiffers = true
+					v.CostDiffers = true
+				}
+			} else {
+				row.Outdated = bySession[store.SessionKey(string(sess.Adapter), sess.Path)]
+			}
+		}
+		v.Sessions = append(v.Sessions, row)
+	}
+	return v
 }
 
 func (s *Server) renderIndex(w http.ResponseWriter, loc i18n.Locale, v indexView) {
@@ -166,6 +236,46 @@ func indexFuncsFor(p *i18n.Printer) template.FuncMap {
 		},
 		"shortpath": report.ShortPath,
 		"clip":      report.Clip,
+		// line cleans a session title for one line of the page: some runtimes
+		// title a session with its first message, so it gets the redaction and
+		// length the ranking gives the same titles (overview.Build).
+		"line": redact.SingleLine,
+		// tip is the title attribute of a value shown with an ellipsis: the
+		// value when it may not fit, else nothing.
+		"tip": report.TipIfWider,
+		// The stored columns of the Sessions and History pages. They format the
+		// cost row an analysis wrote into the index and add nothing up; a missing
+		// row or a missing figure is a dash, never 0.
+		"scost": func(c *analyzer.CostSummary) string {
+			if c == nil || c.Cost == nil {
+				return "—"
+			}
+			if !c.Cost.Known {
+				return p.S("value.unknown")
+			}
+			out := report.Money(*c.Cost)
+			if c.CostPartial {
+				out = "≥" + out
+			}
+			return out
+		},
+		"scredits": func(c *analyzer.CostSummary) string {
+			if c == nil || c.Credits == nil {
+				return "—"
+			}
+			out := fmt.Sprintf("%.2f", *c.Credits)
+			if c.CreditsPartial {
+				out = "≥" + out
+			}
+			return out
+		},
+		"squestions": func(c *analyzer.CostSummary) string {
+			// A session that could not be split has no count: a dash, never 0.
+			if c == nil || c.Legacy || c.QuestionsUnknown {
+				return "—"
+			}
+			return strconv.Itoa(c.Questions)
+		},
 		// There is deliberately no "query" helper. html/template escapes a value it
 		// places inside a query string, so a helper that escaped it first produced
 		// double-encoded links. Its absence makes {{query .ID}} a parse error rather
@@ -266,7 +376,7 @@ const serveCSS = `:root{--bg:#0f1115;--panel:#161a21;--panel2:#1b2029;--border:#
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:15px;line-height:1.6}
 html[lang^="zh"] body{line-height:1.7}
-.wrap{position:relative;max-width:1060px;margin:0 auto;padding:34px 20px 60px}
+.wrap{position:relative;max-width:1180px;margin:0 auto;padding:34px 20px 60px}
 .theme-toggle{position:absolute;top:16px;right:20px;z-index:10;display:inline-flex;align-items:center;gap:6px;padding:6px 11px;background:var(--panel);color:var(--dim);border:1px solid var(--border);border-radius:8px;font:inherit;font-size:12.5px;cursor:pointer}
 .theme-toggle:hover{color:var(--fg);border-color:var(--accent)}
 .theme-toggle .icon{font-size:13px;line-height:1}
@@ -294,13 +404,30 @@ html[lang^="zh"] body{line-height:1.7}
 .card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:0;margin-top:20px;overflow:hidden}
 .card h2{margin:0;padding:16px 20px;font-size:16px;font-weight:620;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:baseline;gap:12px}
 .card h2 .count{color:var(--faint);font-size:13px;font-weight:400}
+/* A table wider than its card scrolls inside it rather than being cut off by the
+   card's rounded edge: the safety net under the compact cells below. */
+.tbl-scroll{overflow-x:auto}
 table{width:100%;border-collapse:collapse;font-size:13.5px}
-th{text-align:left;color:var(--faint);font-weight:500;font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;padding:9px 14px;border-bottom:1px solid var(--border);white-space:nowrap}
-td{padding:11px 14px;border-bottom:1px solid #1d222b;vertical-align:middle}
+th{text-align:left;color:var(--faint);font-weight:500;font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;padding:9px 8px;border-bottom:1px solid var(--border);white-space:nowrap}
+td{padding:11px 8px;border-bottom:1px solid #1d222b;vertical-align:middle}
+th:first-child,td:first-child{padding-left:14px}
+th:last-child,td:last-child{padding-right:14px}
+/* A long title, id or path keeps one line and ends in an ellipsis; the title
+   attribute carries the whole value. */
+.ell{display:block;max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ell.narrow{max-width:120px}
+/* A timestamp broken across lines is unreadable and makes every row taller than
+   the content needs. */
+td.when{white-space:nowrap}
+/* A stored-state label ("— (earlier version)") may take two lines rather than
+   widening its column. */
+td.state{white-space:normal;min-width:74px}
 tr:last-child td{border-bottom:0}
 tr:hover td{background:var(--panel2)}
 .mono{font-family:var(--mono)}
 .num{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+/* Figures a size below the text, so wide numeric columns stay narrow. */
+td.num:not(.faint){font-size:12.5px}
 .tag{font-family:var(--mono);font-size:11.5px;padding:2px 8px;border-radius:5px;background:var(--panel2);border:1px solid var(--border);color:var(--dim);white-space:nowrap}
 .tag.kiro{color:#b46bd8;border-color:rgba(180,107,216,.4)}
 .tag.claude{color:var(--accent);border-color:rgba(97,175,239,.4)}
@@ -350,7 +477,10 @@ tr:hover td{background:var(--panel2)}
 .empty{padding:22px;color:var(--faint)}
 .empty ul{margin:8px 0 0;padding-left:20px;font-family:var(--mono);font-size:12.5px}
 footer{margin-top:28px;color:var(--faint);font-size:12.5px}
-.acts{display:flex;gap:8px;justify-content:flex-end}
+.acts{display:flex;gap:6px;justify-content:flex-end}
+/* A row's buttons, tighter than elsewhere so the last column stays in view. */
+td:last-child .btn{padding:6px 10px}
+.acts .btn.dl{padding:6px 7px}
 @media(max-width:760px){.hide-sm{display:none}}`
 
 const indexTemplate = `<!DOCTYPE html>
@@ -418,13 +548,27 @@ const indexTemplate = `<!DOCTYPE html>
   {{- end}}
 
   <div class="card">
-    <h2>{{T "serve.sessions"}}<span class="count">{{Targs "serve.count" "count" (len .Sessions)}}</span></h2>
+    {{- /* The ranking link starts with /overview? like every other aggregate link,
+           so the progress overlay picks it up; go(href) keeps the fragment. */}}
+    <h2>{{T "serve.sessions"}}<span class="count">{{Targs "serve.count" "count" (len .Sessions)}}{{if .Runtimes}} <a class="btn" href="/overview?adapter=all&amp;lang={{.Locale}}#panel-ranking">{{T "serve.ranking.link"}}</a>{{end}}</span></h2>
     {{- if .Sessions}}
+    {{- /* Compact so every column, the buttons included, fits a laptop window:
+           titles, ids and paths keep one line with an ellipsis (the title
+           attribute has the whole value), and the scroll container is the
+           safety net. */}}
+    <div class="tbl-scroll">
     <table>
       <thead>
         <tr>
           <th>{{T "serve.runtime"}}</th>
           <th>{{T "serve.session"}}</th>
+          {{- if .ShowStored}}
+          {{- if .ShowCost}}
+          <th class="num">{{T "serve.col.cost"}}</th>
+          {{- end}}
+          <th class="num hide-sm">{{T "serve.col.credits"}}</th>
+          <th class="num hide-sm">{{T "serve.col.questions"}}</th>
+          {{- end}}
           <th class="hide-sm">{{T "serve.project"}}</th>
           <th class="hide-sm">{{T "serve.modified"}}</th>
           <th class="num hide-sm">{{T "serve.size"}}</th>
@@ -443,12 +587,51 @@ const indexTemplate = `<!DOCTYPE html>
             <div class="title">{{T "serve.demo"}}</div>
             <div class="faint">{{T "serve.demo.hint"}}</div>
             {{- else}}
-            <div class="title">{{if .Title}}{{clip .Title 58}}{{else}}{{clip .SessionID 58}}{{end}}</div>
-            <div class="faint mono">{{clip .SessionID 44}}{{if .Model}} · {{.Model}}{{end}}</div>
+            {{- /* The tip thresholds leave a margin under the .ell width: 170px
+                   holds 17 cells of the widest likely text and 23 of the 12px
+                   monospace id, 120px 16 of a monospace path. */}}
+            {{- $name := line (or .Title .SessionID) 80}}
+            {{- $idl := .SessionID}}{{if .Model}}{{$idl = printf "%s · %s" .SessionID .Model}}{{end}}
+            <div class="title ell"{{with tip $name 17}} title="{{.}}"{{end}}>{{$name}}</div>
+            <div class="faint mono ell"{{with tip $idl 23}} title="{{.}}"{{end}}>{{$idl}}</div>
             {{- end}}
           </td>
-          <td class="hide-sm mono faint">{{shortpath .Project}}</td>
-          <td class="hide-sm faint">{{when .ModTime}}</td>
+          {{- if $.ShowStored}}
+          {{- /* Copied from the store's index, never computed here. A row whose
+                 columns the store cannot fill says why once, in the first stored
+                 column: never analysed, analysed only in an older state of the
+                 file or by another build, or analysed by a version without the
+                 index's cost row. The demo is never stored. */}}
+          {{- $state := ""}}{{$hint := ""}}
+          {{- if .Demo}}
+          {{- else if .Outdated}}{{$state = T "serve.stored.outdated"}}{{$hint = T "serve.stored.outdated.hint"}}
+          {{- else if not .Analysed}}{{$state = T "serve.unanalysed"}}
+          {{- else if not .Summary}}{{$state = T "serve.stored.legacy"}}{{$hint = T "serve.stored.legacy.hint"}}
+          {{- end}}
+          {{- if or .Demo (not .Analysed) (not .Summary)}}
+          {{- if $.ShowCost}}
+          <td class="num faint state"{{with $hint}} title="{{.}}"{{end}}>{{or $state "—"}}</td>
+          <td class="num faint hide-sm">—</td>
+          {{- else}}
+          <td class="num faint hide-sm state"{{with $hint}} title="{{.}}"{{end}}>{{or $state "—"}}</td>
+          {{- end}}
+          <td class="num faint hide-sm">—</td>
+          {{- else}}
+          {{- if $.ShowCost}}
+          <td class="num">{{scost .Summary}}{{if .PricingDiffers}} <span class="tag" title="{{T "serve.cost.differs"}}">≠</span>{{end}}</td>
+          {{- end}}
+          <td class="num faint hide-sm">{{scredits .Summary}}</td>
+          {{- /* An analysis from before the questions section has its cost but no
+                 question count: it says so rather than showing a bare dash. */}}
+          {{- if .Legacy}}
+          <td class="num faint hide-sm state" title="{{T "serve.stored.legacy.hint"}}">{{T "serve.stored.legacy"}}</td>
+          {{- else}}
+          <td class="num hide-sm">{{squestions .Summary}}</td>
+          {{- end}}
+          {{- end}}
+          {{- end}}
+          <td class="hide-sm mono faint"><span class="ell narrow"{{with tip .Project 16}} title="{{.}}"{{end}}>{{shortpath .Project}}</span></td>
+          <td class="hide-sm faint when">{{when .ModTime}}</td>
           <td class="num faint">{{bytes .Size}}</td>
           <td>
             <div class="acts">
@@ -466,6 +649,10 @@ const indexTemplate = `<!DOCTYPE html>
         {{- end}}
       </tbody>
     </table>
+    </div>
+    {{- if .CostDiffers}}
+    <p class="faint" style="margin:0;padding:10px 14px;border-top:1px solid var(--border)">{{T "serve.cost.differs"}}</p>
+    {{- end}}
     {{- else}}
     <div class="empty">
       {{T "serve.none"}}

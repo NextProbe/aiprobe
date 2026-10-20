@@ -70,6 +70,45 @@ type commonFlags struct {
 	discount float64
 	currency string
 	noCost   bool
+
+	// questions: registered per command (registerSort, registerQuestion,
+	// registerPreview), because not every command that shares the rest has them.
+	sortKey         string
+	question        int
+	promptPreview   bool
+	noPromptPreview bool
+}
+
+// sortKeys are the accepted --sort values, in the order the error lists them.
+var sortKeys = []string{"cost", "credits", "tokens", "time"}
+
+// registerSort adds --sort. forRanking selects the overview's meaning: the order
+// of the session ranking rather than of one session's questions.
+func (f *commonFlags) registerSort(cmd *cobra.Command, forRanking bool) {
+	help := "order of the questions table: cost, credits, tokens (context exposure) or time (1 to n); default picks the first the session can rank by. --json keeps questions in time order"
+	if forRanking {
+		help = "order of the session ranking: cost, credits, tokens (context exposure) or time (newest first); default picks the first the sessions can rank by"
+	}
+	cmd.Flags().StringVar(&f.sortKey, "sort", "", help)
+}
+
+// registerQuestion adds --question.
+func (f *commonFlags) registerQuestion(cmd *cobra.Command) {
+	cmd.Flags().IntVar(&f.question, "question", 0, "print only question N, with every request in it (terminal report only)")
+}
+
+// registerPreview adds the preview switches a command supports: --prompt-preview
+// for commands that write files, --no-prompt-preview for those that show
+// previews by default.
+func (f *commonFlags) registerPreview(cmd *cobra.Command, filePreview, noPreview bool) {
+	if filePreview {
+		cmd.Flags().BoolVar(&f.promptPreview, "prompt-preview", false,
+			"include a one-line, credential-scrubbed preview of each question in --json and --html output (omitted by default)")
+	}
+	if noPreview {
+		cmd.Flags().BoolVar(&f.noPromptPreview, "no-prompt-preview", false,
+			"do not show question previews in the terminal report, for example when sharing a screen")
+	}
 }
 
 func (f *commonFlags) register(cmd *cobra.Command, withInput bool) {
@@ -146,6 +185,45 @@ func (f *commonFlags) validate() error {
 		if _, ok := i18n.ParseStrict(f.lang); !ok {
 			return fmt.Errorf("unsupported --lang %q, expected one of %s", f.lang, localeList())
 		}
+	}
+	if f.sortKey != "" {
+		valid := false
+		for _, k := range sortKeys {
+			if f.sortKey == k {
+				valid = true
+			}
+		}
+		if !valid {
+			return fmt.Errorf("unknown --sort %q, expected one of %s", f.sortKey, strings.Join(sortKeys, ", "))
+		}
+	}
+	if f.question < 0 {
+		return errors.New("--question must be 1 or more (0 shows every question)")
+	}
+	if f.question > 0 && (f.asJSON || f.asHTML) {
+		return errors.New("--question applies to the terminal report only; drop --json/--html or remove --question")
+	}
+	if f.promptPreview && f.noPromptPreview {
+		return errors.New("--prompt-preview and --no-prompt-preview are mutually exclusive")
+	}
+	return nil
+}
+
+// checkQuestion rejects a --question that the session does not have. It runs
+// after the analysis, because only the analysis knows how many there are.
+func (f *commonFlags) checkQuestion(res *analyzer.Result) error {
+	if f.question <= 0 {
+		return nil
+	}
+	n := 0
+	if res.Questions != nil {
+		n = res.Questions.Count
+	}
+	if n == 0 {
+		return fmt.Errorf("question %d does not exist; this session has no questions", f.question)
+	}
+	if f.question > n {
+		return fmt.Errorf("question %d does not exist; this session has questions 1–%d", f.question, n)
 	}
 	return nil
 }
@@ -529,43 +607,76 @@ func emit(cmd *cobra.Command, res *analyzer.Result, f *commonFlags) error {
 	case f.asHTML:
 		return emitHTML(cmd, res, f)
 	default:
+		if err := f.checkQuestion(res); err != nil {
+			return err
+		}
+		if f.promptPreview {
+			fmt.Fprintln(cmd.ErrOrStderr(),
+				"aiprobe: --prompt-preview only affects --json and --html output; the terminal report shows previews by default")
+		}
+		// The terminal shows previews by default: it is the person's own screen,
+		// and nothing printed there is written anywhere.
+		var previews map[int]string
+		if !f.noPromptPreview && res.Trace != nil {
+			previews = analyzer.QuestionPreviews(res.Trace)
+		}
 		return reportterm.Write(cmd.OutOrStdout(), res, reportterm.Options{
-			Color:   useColor(cmd, f),
-			Width:   f.width,
-			TopN:    f.topN,
-			Verbose: f.verbose,
-			Locale:  f.locale(),
+			Color:    useColor(cmd, f),
+			Width:    f.width,
+			TopN:     f.topN,
+			Verbose:  f.verbose,
+			Locale:   f.locale(),
+			Sort:     analyzer.SortKey(f.sortKey),
+			Question: f.question,
+			Previews: previews,
 		})
 	}
 }
 
 func emitJSON(cmd *cobra.Command, res *analyzer.Result, f *commonFlags) error {
+	opts := report.JSONOptions{Indent: !f.compact, Previews: f.filePreviews(cmd, res)}
 	if f.outPath == "" {
-		return report.WriteJSON(cmd.OutOrStdout(), res, !f.compact)
+		return report.WriteJSONOptions(cmd.OutOrStdout(), res, opts)
 	}
 	return withFile(f.outPath, func(w io.Writer) error {
-		return report.WriteJSON(w, res, !f.compact)
+		return report.WriteJSONOptions(w, res, opts)
 	}, cmd, "JSON report")
 }
 
+// filePreviews decides what question previews a written file carries: none
+// unless --prompt-preview asked for them. A fresh analysis derives them from the
+// transcript; a re-rendered report (--from) can only keep the ones it has.
+func (f *commonFlags) filePreviews(cmd *cobra.Command, res *analyzer.Result) map[int]string {
+	if !f.promptPreview {
+		return nil
+	}
+	if res.Trace != nil {
+		return analyzer.QuestionPreviews(res.Trace)
+	}
+	previews := report.PreviewsOf(res)
+	if previews == nil {
+		fmt.Fprintln(cmd.ErrOrStderr(), "aiprobe: the saved report carries no previews; --prompt-preview has nothing to add")
+	}
+	return previews
+}
+
 func emitHTML(cmd *cobra.Command, res *analyzer.Result, f *commonFlags) error {
+	opts := reporthtml.Options{
+		EmbedJSON: f.embedJSON,
+		TopN:      f.topN,
+		Locale:    f.locale(),
+		Sort:      analyzer.SortKey(f.sortKey),
+		Previews:  f.filePreviews(cmd, res),
+	}
 	if f.outPath == "-" {
-		return reporthtml.Render(cmd.OutOrStdout(), res, reporthtml.Options{
-			EmbedJSON: f.embedJSON,
-			TopN:      f.topN,
-			Locale:    f.locale(),
-		})
+		return reporthtml.Render(cmd.OutOrStdout(), res, opts)
 	}
 	path := f.outPath
 	if path == "" {
 		path = DefaultHTMLName
 	}
 	return withFile(path, func(w io.Writer) error {
-		return reporthtml.Render(w, res, reporthtml.Options{
-			EmbedJSON: f.embedJSON,
-			TopN:      f.topN,
-			Locale:    f.locale(),
-		})
+		return reporthtml.Render(w, res, opts)
 	}, cmd, "HTML report")
 }
 

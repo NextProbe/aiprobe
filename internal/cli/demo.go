@@ -22,6 +22,8 @@ cannot be explained from local data.
 
   aiprobe demo
   aiprobe demo --verbose
+  aiprobe demo --question 3
+  aiprobe demo --sort time
   aiprobe demo --html -o demo.html`,
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
@@ -44,5 +46,8 @@ cannot be explained from local data.
 		},
 	}
 	f.register(cmd, false)
+	f.registerSort(cmd, false)
+	f.registerQuestion(cmd)
+	f.registerPreview(cmd, true, true)
 	return cmd
 }

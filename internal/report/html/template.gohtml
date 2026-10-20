@@ -7,6 +7,9 @@
 <meta name="robots" content="noindex, nofollow">
 <title>{{.Title}}</title>
 <style>{{.CSS}}</style>
+{{- /* A question's detail row opens with a button, which needs script; without
+       it every detail row is simply shown. */}}
+<noscript><style>tr.q-detail[hidden]{display:table-row}</style></noscript>
 <script>{{.ThemeJS}}</script>
 </head>
 <body>
@@ -126,6 +129,7 @@
   <button class="tab" role="tab" data-target="panel-mcp" aria-controls="panel-mcp">{{T "tab.mcp"}}</button>
   <button class="tab" role="tab" data-target="panel-dup" aria-controls="panel-dup">{{T "tab.dup"}}</button>
   {{- if $r.Spend}}<button class="tab" role="tab" data-target="panel-spend" aria-controls="panel-spend">{{T "tab.spend"}}</button>{{end}}
+  <button class="tab" role="tab" data-target="panel-questions" aria-controls="panel-questions">{{T "tab.questions"}}{{with $r.Questions}}<span class="count">{{.Count}}</span>{{end}}</button>
   <button class="tab" role="tab" data-target="panel-score" aria-controls="panel-score">{{T "tab.score"}}</button>
   <button class="tab" role="tab" data-target="panel-method" aria-controls="panel-method">{{T "tab.method"}}</button>
   {{- if .HasJSON}}<button class="tab" role="tab" data-target="panel-json" aria-controls="panel-json">{{T "tab.json"}}</button>{{end}}
@@ -715,6 +719,12 @@
     {{- if .CreditUnit}}
     <p class="note">{{Targs "spend.credits.short" "amount" (printf "%.2f" .CreditAmount) "unit" .CreditUnit}}</p>
     {{- end}}
+    {{- /* Beside the runtime's own charge, a modelled amount must not read as the
+           bill. Same rule as the terminal (spend.go): a modelled session with
+           credits on record. */}}
+    {{- if and .Modelled .CreditUnit .CreditAmount}}
+    <p class="note">{{T "spend.modelled.bill"}}</p>
+    {{- end}}
     {{- else}}
     {{- if .Ceiling.Known}}
     <div class="money wide">
@@ -732,6 +742,137 @@
   </div>
 </section>
 {{- end}}
+
+{{/* ---------------- questions ----------------
+     Every figure here is the analyzer's; the template only formats. Cells that
+     sort carry data-sort in plain decimal (sortnum), and an unknown value an
+     empty one, which the sorter places last. A question expands into the detail
+     row directly under it, which spans the whole table; the button in the
+     question cell toggles it (app.js), the sorter moves the pair together, and
+     without script every detail row is shown (the noscript style in the head). */}}
+{{- /* On a served page the panel names where its previews come from and the
+       fingerprint and count they must match (live.js). A file has neither. */}}
+<section class="panel" id="panel-questions" role="tabpanel" aria-label="{{T "tab.questions"}}"
+  {{- if $.PreviewsHref}}{{with $r.Questions}} data-previews="{{$.PreviewsHref}}" data-fp="{{$.PreviewsKey}}" data-count="{{.Count}}"{{end}}{{end}}>
+  <div class="card">
+    <h2>{{T "section.questions"}}</h2>
+    {{- with $q := $r.Questions}}
+    {{- $key := qkey $q $.Sort}}
+    {{- if .PreviewsIncluded}}
+    <p class="note warn">{{T "questions.previews_included"}}</p>
+    {{- end}}
+    <p class="sub">{{Targs "section.questions.right" "count" .Count "key" (qsortlabel $key)}}</p>
+    {{- $counted := qcounted $q}}
+    {{- $credits := qshowcredits $q}}
+    {{- $rows := qrows $q $.Sort}}
+    {{- $span := qcolspan $q $credits}}
+    {{- if $rows}}
+    <div class="tbl-scroll">
+    <table class="data q-table">
+      <thead>
+        <tr>
+          <th class="sortable" data-numeric="true"{{if eq $key "time"}} aria-sort="ascending"{{end}}>{{T "questions.col.num"}}</th>
+          <th>{{T "questions.col.question"}}</th>
+          {{- if $q.Summary.Cost}}
+          <th class="sortable" data-numeric="true" style="text-align:right"{{if eq $key "cost"}} aria-sort="descending"{{end}}>{{T "questions.col.cost"}}</th>
+          {{- end}}
+          <th class="sortable" data-numeric="true" style="text-align:right">{{if eq $q.ShareBasis "exposure"}}{{T "questions.col.share_exposure"}}{{else if eq $q.ShareBasis "credits"}}{{T "questions.col.share_credits"}}{{else}}{{T "questions.col.share"}}{{end}}</th>
+          {{- if $credits}}
+          <th class="sortable" data-numeric="true" style="text-align:right"{{if eq $key "credits"}} aria-sort="descending"{{end}}>{{T "questions.col.credits"}}</th>
+          {{- end}}
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "questions.col.requests"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right"{{if eq $key "tokens"}} aria-sort="descending"{{end}}>{{T "questions.col.exposure"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "questions.col.start_context"}}</th>
+          <th>{{T "questions.col.tools"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "questions.col.duration"}}</th>
+          <th class="sortable" data-numeric="true">{{T "questions.col.started"}}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{- range $rows}}
+        <tr>
+          <td class="num" data-sort="{{.Number}}">{{.Number}}</td>
+          <td class="q-cell"><button type="button" class="q-toggle" aria-expanded="false" aria-controls="qd-{{.Number}}"><span class="q-preview" data-q="{{.Number}}" data-empty="{{T "questions.preview.attachments"}}">{{qlabel . $q.PreviewsIncluded}}</span>{{range qflags .}} <span class="tag">{{.}}</span>{{end}}</button></td>
+          {{- if $q.Summary.Cost}}
+          <td class="num" data-sort="{{qcostsort .Cost}}">{{qcost .Cost .CostPartial}}</td>
+          {{- end}}
+          <td class="num" data-sort="{{qfloatsort .Share}}">{{qshare .Share}}</td>
+          {{- if $credits}}
+          <td class="num" data-sort="{{qfloatsort .Credits}}">{{qcredits .Credits .CreditsPartial}}</td>
+          {{- end}}
+          <td class="num" data-sort="{{.Requests}}">{{.Requests}}</td>
+          <td class="num" data-sort="{{qtoksort .Exposure}}">{{qtok .Exposure .TokensPartial}}</td>
+          <td class="num" data-sort="{{qstartsort .StartContext}}">{{qstart .StartContext}}</td>
+          <td class="mono q-tools">{{range $i, $t := qtools .TopTools}}{{if $i}} {{end}}<span{{with tip $t 18}} title="{{.}}"{{end}}>{{$t}}</span>{{end}}</td>
+          <td class="num" data-sort="{{qdursort .DurationSecs}}">{{qdur .DurationSecs}}</td>
+          <td class="when" data-sort="{{qwhensort .StartUnix}}">{{qwhen .StartUnix}}</td>
+        </tr>
+        <tr class="q-detail" id="qd-{{.Number}}" hidden><td colspan="{{$span}}">{{template "qdetail" (qd $q . $counted)}}</td></tr>
+        {{- end}}
+      </tbody>
+      <tfoot>
+        <tr class="total">
+          <td></td>
+          <td>{{T "questions.total"}}</td>
+          {{- if $q.Summary.Cost}}
+          <td class="num">{{qcost $q.Summary.Cost $q.Summary.CostPartial}}</td>
+          {{- end}}
+          <td class="num">{{if $q.ShareBasis}}100%{{else}}—{{end}}</td>
+          {{- if $credits}}
+          <td class="num">{{qcredits $q.Summary.Credits $q.Summary.CreditsPartial}}</td>
+          {{- end}}
+          <td class="num">{{$q.Summary.Requests}}</td>
+          <td class="num">{{qtok $q.Summary.Exposure $q.Summary.TokensPartial}}</td>
+          <td colspan="4"></td>
+        </tr>
+      </tfoot>
+    </table>
+    </div>
+    {{- end}}
+
+    {{- with $buckets := qbuckets $q}}
+    {{- $bspan := qbucketspan $q $credits}}
+    <div class="tbl-scroll">
+    <table class="q-buckets">
+      <tbody>
+        {{- range $buckets}}
+        <tr>
+          <td class="q-cell"><button type="button" class="q-toggle" aria-expanded="false" aria-controls="qd-{{.Kind}}">{{qkind .Kind}}{{range qflags .}} <span class="tag">{{.}}</span>{{end}}</button></td>
+          {{- if $q.Summary.Cost}}<td class="num">{{qcost .Cost .CostPartial}}</td>{{end}}
+          <td class="num">{{qshare .Share}}</td>
+          {{- if $credits}}<td class="num">{{qcredits .Credits .CreditsPartial}}</td>{{end}}
+          <td class="num">{{Targs "questions.bucket.requests" "count" .Requests}}</td>
+          <td class="num">{{qtok .Exposure .TokensPartial}}</td>
+        </tr>
+        <tr class="q-detail" id="qd-{{.Kind}}" hidden><td colspan="{{$bspan}}">{{template "qdetail" (qd $q . $counted)}}</td></tr>
+        {{- end}}
+      </tbody>
+    </table>
+    </div>
+    {{- end}}
+
+    <p class="note">{{Targs "questions.reliability" "verdict" (qverdict $q) "reason" (qreason $q)}}</p>
+    {{- range notes $q.Notes $q.NoteMsgs}}<p class="note">{{.}}</p>{{end}}
+    <p class="note est">{{T "questions.legend.unreported"}}</p>
+    <p class="note est">{{T "questions.legend.sidechain"}}</p>
+    <p class="note est">{{T "questions.legend.injected"}}</p>
+    {{- if qmodelled $q}}<p class="note est">{{T "questions.legend.modelled"}}</p>{{end}}
+    {{- else}}
+    <p class="note warn">{{T "questions.legacy"}}</p>
+    {{- if $.ReanalyseHref}}
+    {{- /* A served page can re-run the analysis in place; the command is the way
+           out without script, and for anyone who prefers the terminal. */}}
+    <div class="q-reanalyse">
+      <button type="button" class="btn" data-reanalyse="{{$.ReanalyseHref}}" data-working="{{T "questions.legacy.working"}}" data-failed="{{T "questions.legacy.failed"}}">{{T "questions.legacy.reanalyse"}}</button>
+      <span class="status" id="q-reanalyse-status" role="status" aria-live="polite"></span>
+    </div>
+    <p class="note">{{Targs "questions.legacy.cli" "path" $r.Meta.SourcePath}}</p>
+    {{- else}}
+    <p class="note">{{Targs "questions.legacy.file" "path" $r.Meta.SourcePath}}</p>
+    {{- end}}
+    {{- end}}
+  </div>
+</section>
 
 {{/* ---------------- score ---------------- */}}
 <section class="panel" id="panel-score" role="tabpanel" aria-label="{{T "tab.score"}}">
@@ -810,8 +951,12 @@
     <ul>
       <li>{{T "privacy.1"}}</li>
       <li>{{T "privacy.2"}}</li>
-      <li>{{T "privacy.3"}}</li>
+      {{- /* Whether this page makes requests and whether it says so are decided by
+             the same two fields: live.js is inlined exactly when one is set. */}}
+      <li>{{if or $.PreviewsHref $.ReanalyseHref}}{{T "privacy.3.live"}}{{else}}{{T "privacy.3"}}{{end}}</li>
       <li>{{T "privacy.4"}}</li>
+      {{- with $r.Questions}}{{if .PreviewsIncluded}}<li>{{T "privacy.5"}}</li>{{end}}{{end}}
+      {{- if $.PreviewsHref}}<li>{{T "privacy.live"}}</li>{{end}}
     </ul>
     {{- if $r.Meta.Warnings}}
     <h2 style="margin-top:22px">{{T "privacy.warnings"}}</h2>
@@ -841,5 +986,57 @@
 
 </div>
 <script>{{.JS}}</script>
+{{- if .LiveJS}}
+<script>{{.LiveJS}}</script>
+{{- end}}
 </body>
 </html>
+{{/* qdetail is a question's expanded view: its four token classes and costs,
+     then every request it made. A plain table (not "data"), so the outer sorter
+     never reorders it. */ -}}
+{{- define "qdetail"}}
+<table class="q-classes">
+  <thead><tr><th></th><th class="num">{{T "questions.col.input"}}</th><th class="num">{{T "questions.col.output"}}</th><th class="num">{{T "questions.col.cache_read"}}</th><th class="num">{{T "questions.col.cache_write"}}</th></tr></thead>
+  <tbody>
+    <tr><td>{{T "questions.detail.tokens"}}</td><td class="num">{{qtok .It.Tokens.Input .It.TokensPartial}}</td><td class="num">{{qtok .It.Tokens.Output .It.TokensPartial}}</td><td class="num">{{qtok .It.Tokens.CacheRead .It.TokensPartial}}</td><td class="num">{{qtok .It.Tokens.CacheWrite .It.TokensPartial}}</td></tr>
+    {{- with .It.Cost}}{{if .Known}}
+    <tr><td>{{T "questions.col.cost"}}</td><td class="num">{{qmoney4 .Input .}}</td><td class="num">{{qmoney4 .Output .}}</td><td class="num">{{qmoney4 .CacheRead .}}</td><td class="num">{{qmoney4 .CacheWrite .}}</td></tr>
+    {{- end}}{{end}}
+  </tbody>
+</table>
+{{- $d := .}}
+{{- with $reqs := qreqs .Q .It}}
+<table class="q-requests">
+  <thead>
+    <tr>
+      <th>{{T "questions.col.num"}}</th>
+      <th>{{T "questions.col.time"}}</th>
+      <th>{{T "questions.col.model"}}</th>
+      {{- if $d.Counted}}
+      <th class="num">{{T "questions.col.input"}}</th>
+      <th class="num">{{T "questions.col.output"}}</th>
+      <th class="num">{{T "questions.col.cache_read"}}</th>
+      <th class="num">{{T "questions.col.cache_write"}}</th>
+      {{- if $d.Q.Summary.Cost}}<th class="num">{{T "questions.col.cost"}}</th>{{end}}
+      {{- else}}
+      <th class="num">{{T "questions.col.context"}}</th>
+      {{- end}}
+      <th>{{T "questions.col.tools"}}</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{- /* One line per request: a long session has tens of thousands of these
+           rows, so their indentation alone would add megabytes. Each tool name
+           is its own span, kept on one line by the stylesheet, so the list
+           wraps only between tools. */}}
+    {{- range $reqs}}
+    <tr><td class="num">{{qreqnum .}}</td><td class="mono">{{reqtime .TimestampUnix}}</td><td><code>{{shortmodel .Model}}</code></td>
+      {{- if $d.Counted}}<td class="num">{{qusage $d.Q . "input"}}</td><td class="num">{{qusage $d.Q . "output"}}</td><td class="num">{{qusage $d.Q . "cache_read"}}</td><td class="num">{{qusage $d.Q . "cache_write"}}</td>
+      {{- if $d.Q.Summary.Cost}}<td class="num">{{qreqcost $d.Q .}}</td>{{end}}
+      {{- else}}<td class="num">{{qreqcontext .}}</td>{{end -}}
+      <td class="mono">{{range $i, $t := .Tools}}{{if $i}}, {{end}}<span>{{$t}}</span>{{end}}</td></tr>
+    {{- end}}
+  </tbody>
+</table>
+{{- end}}
+{{- end -}}

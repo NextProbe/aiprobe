@@ -121,6 +121,12 @@ type payload struct {
 	Explanation       string `json:"explanation"`
 	Response          string `json:"response"`
 
+	// user: where the message came from ("chat", "steer", …) and what the
+	// person attached. Raw, and read only in addUser, so a shape this adapter
+	// has not seen cannot cost the line.
+	Source       json.RawMessage `json:"source"`
+	ContextItems json.RawMessage `json:"contextItems"`
+
 	Meta *meta `json:"_meta"`
 }
 
@@ -138,6 +144,15 @@ type kiroMeta struct {
 	// ServerName is the MCP server, present for client-origin tools.
 	ServerName string          `json:"serverName"`
 	Checkpoint json.RawMessage `json:"checkpoint"`
+
+	// The markers Kiro puts on user records it wrote itself: a synthetic
+	// message (steering injection, a wake-up, a workflow continuation) or a
+	// notification. displayText is the person-facing form of a prompt. All raw,
+	// because _meta.kiro rides on every record type and must never make one
+	// undecodable; they are read only in addUser.
+	SyntheticUserMessageReason json.RawMessage `json:"syntheticUserMessageReason"`
+	Notification               json.RawMessage `json:"notification"`
+	DisplayText                json.RawMessage `json:"displayText"`
 }
 
 // turnSummary is Kiro's per-turn billing record. Note the unit: Kiro reports
@@ -214,6 +229,36 @@ func decodeContent(raw json.RawMessage) string {
 		}
 	}
 	return ""
+}
+
+// stringOf returns raw as a string when it is a JSON string, and "" for any
+// other shape. A field that changed shape reads as absent; it never costs the
+// line it sits on.
+func stringOf(raw json.RawMessage) string {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed[0] != '"' {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(raw, &s) != nil {
+		return ""
+	}
+	return s
+}
+
+// marked reports whether a marker field is set: present, not null and not "".
+func marked(raw json.RawMessage) bool {
+	trimmed := strings.TrimSpace(string(raw))
+	return trimmed != "" && trimmed != "null" && trimmed != `""`
+}
+
+// emptyJSON reports whether raw holds nothing: missing, null, [] or {}.
+func emptyJSON(raw json.RawMessage) bool {
+	switch strings.Join(strings.Fields(string(raw)), "") {
+	case "", "null", "[]", "{}":
+		return true
+	}
+	return false
 }
 
 func parseTime(s string) time.Time {

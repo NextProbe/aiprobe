@@ -96,10 +96,22 @@
           th.setAttribute("aria-sort", dir);
           var body = table.tBodies[0];
           if (!body) { return; }
-          var rows = Array.prototype.slice.call(body.rows);
+          // A question's detail row (tr.q-detail) travels with the row above it:
+          // only the rows that carry values are compared, and each is put back
+          // followed by its own detail row.
+          var pairs = [];
+          Array.prototype.forEach.call(body.rows, function (r) {
+            if (r.classList.contains("q-detail")) { return; }
+            var next = r.nextElementSibling;
+            pairs.push({ row: r, detail: next && next.classList.contains("q-detail") ? next : null });
+          });
           var numeric = th.getAttribute("data-numeric") === "true";
-          rows.sort(comparator(colIndex, numeric, dir));
-          rows.forEach(function (r) { body.appendChild(r); });
+          var cmp = comparator(colIndex, numeric, dir);
+          pairs.sort(function (a, b) { return cmp(a.row, b.row); });
+          pairs.forEach(function (p) {
+            body.appendChild(p.row);
+            if (p.detail) { body.appendChild(p.detail); }
+          });
         }
 
         th.addEventListener("click", apply);
@@ -107,6 +119,28 @@
           if (e.key === "Enter" || e.key === " ") { e.preventDefault(); apply(); }
         });
       });
+    });
+  }
+
+  /* ---- question detail rows ----
+     A question expands into the row directly under it, which spans the whole
+     table. The button in the question cell opens and closes it and says which
+     through aria-expanded. One listener on the panel serves every button. */
+
+  function initQuestionToggles() {
+    var panel = document.getElementById("panel-questions");
+    if (!panel) { return; }
+    panel.addEventListener("click", function (e) {
+      var btn = e.target;
+      while (btn && btn !== panel && !(btn.classList && btn.classList.contains("q-toggle"))) {
+        btn = btn.parentNode;
+      }
+      if (!btn || btn === panel) { return; }
+      var row = document.getElementById(btn.getAttribute("aria-controls") || "");
+      if (!row) { return; }
+      var open = btn.getAttribute("aria-expanded") !== "true";
+      btn.setAttribute("aria-expanded", open ? "true" : "false");
+      row.hidden = !open;
     });
   }
 
@@ -146,6 +180,7 @@
   ready(function () {
     initTabs();
     initSort();
+    initQuestionToggles();
     initCopy();
   });
 })();

@@ -63,7 +63,7 @@ func ParseFile(path string) (*trace.Trace, error) {
 // Trace.SkippedLines and recorded in Trace.Warnings rather than failing the run.
 func Parse(r io.Reader, sourceName string) (*trace.Trace, error) {
 	tr := &trace.Trace{Adapter: AdapterName, SourcePath: sourceName}
-	p := &parser{tr: tr, toolUseByID: map[string]int{}}
+	p := &parser{tr: tr, toolUseByID: map[string]int{}, reqByKey: map[string]int{}}
 
 	br := bufio.NewReaderSize(r, 1<<20)
 	lineNo := 0
@@ -86,6 +86,7 @@ func Parse(r io.Reader, sourceName string) (*trace.Trace, error) {
 		return nil, ErrNoRecords
 	}
 	p.finish()
+	tr.Prompts = trace.PromptsClassified
 	return tr, nil
 }
 
@@ -112,6 +113,34 @@ type parser struct {
 	tr          *trace.Trace
 	toolUseByID map[string]int
 	warnedTypes map[string]bool
+	// reqByKey maps a response key (see responseKey) to the request it
+	// opened, so the later lines of one API response join that request.
+	reqByKey map[string]int
+	// candidates are the sidechain user messages with the origin they would
+	// have outside a sidechain, for a transcript that is all sidechain.
+	candidates []candidate
+}
+
+// candidate is a sidechain user message and how it would classify on the main
+// thread.
+type candidate struct {
+	event   int
+	origin  trace.Origin
+	display string
+}
+
+// responseKey identifies the API response an assistant line belongs to.
+// Claude Code writes one response as several lines, one per content block,
+// each repeating the response's usage; they share message.id, or failing
+// that requestId. An empty key means the line cannot be matched to another.
+func responseKey(messageID, requestID string) string {
+	if messageID != "" {
+		return "m:" + messageID
+	}
+	if requestID != "" {
+		return "r:" + requestID
+	}
+	return ""
 }
 
 // newEvent presets the cross-reference indexes to -1 ("not applicable"), so a
@@ -162,19 +191,53 @@ func (p *parser) consume(line string, lineNo int) {
 		p.addSystem(rec, lineNo)
 	case recTypeSnapshot:
 		p.addEvent(newEvent(trace.KindSnapshot, trace.CatOthers), rec, lineNo)
+	case recTypeAttachment:
+		if !p.addQueued(rec, lineNo) {
+			p.addUnknown(rec, lineNo)
+		}
 	case "":
 		p.tr.SkippedLines++
 		p.warn("line %d: record has no type field", lineNo)
 	default:
-		if p.warnedTypes == nil {
-			p.warnedTypes = map[string]bool{}
-		}
-		if !p.warnedTypes[rec.Type] {
-			p.warnedTypes[rec.Type] = true
-			p.warn("unrecognised record type %q (counted under Others)", rec.Type)
-		}
-		p.addEvent(newEvent(trace.KindUnknown, trace.CatOthers), rec, lineNo)
+		p.addUnknown(rec, lineNo)
 	}
+}
+
+// addUnknown keeps a record this adapter does not interpret, so its position in
+// the timeline survives, and says once per type that it was not understood.
+func (p *parser) addUnknown(rec rawRecord, lineNo int) {
+	if p.warnedTypes == nil {
+		p.warnedTypes = map[string]bool{}
+	}
+	if !p.warnedTypes[rec.Type] {
+		p.warnedTypes[rec.Type] = true
+		p.warn("unrecognised record type %q (counted under Others)", rec.Type)
+	}
+	p.addEvent(newEvent(trace.KindUnknown, trace.CatOthers), rec, lineNo)
+}
+
+// addQueued turns a queued_command attachment into the user message it is: text
+// the person (or the runtime) queued while the agent worked, which the next
+// request carries. It reports false for any other attachment.
+func (p *parser) addQueued(rec rawRecord, lineNo int) bool {
+	text, origin, display, ok := queuedPrompt(rec.Attachment)
+	if !ok {
+		return false
+	}
+	ev := newEvent(trace.KindUserMessage, trace.CatMessages)
+	ev.Role = "user"
+	ev.Text = text
+	idx := len(p.tr.Events)
+	if rec.IsSidechain {
+		p.candidates = append(p.candidates, candidate{event: idx, origin: origin, display: display})
+		origin, display = trace.OriginInjected, ""
+	}
+	ev.Origin = origin
+	if origin.OpensQuestion() {
+		ev.Display = display
+	}
+	p.addEvent(ev, rec, lineNo)
+	return true
 }
 
 // addEvent finalises common fields and appends the event, returning its index.
@@ -253,6 +316,12 @@ func (p *parser) addSystem(rec rawRecord, lineNo int) {
 	if m := reCommandName.FindStringSubmatch(text); m != nil {
 		ev.Subtype = "local_command"
 	}
+	// Older versions wrote the person's slash command as a system record. It
+	// opens a question unless the file also has new-format commands (finish).
+	if startsCommand(text) {
+		ev.Origin = trace.OriginCommand
+		ev.Display = commandDisplay(strings.TrimSpace(text))
+	}
 	if rec.Subtype == "compact_boundary" {
 		ev.IsCompactSummary = true
 	}
@@ -261,9 +330,14 @@ func (p *parser) addSystem(rec rawRecord, lineNo int) {
 
 func (p *parser) addUser(rec rawRecord, lineNo int) {
 	var msg rawMessage
+	unreadable := false
 	if len(rec.Message) > 0 {
 		if err := jsonUnmarshal(string(rec.Message), &msg); err != nil {
 			p.warn("line %d: undecodable user message (%v)", lineNo, shortErr(err))
+			// Whether a person wrote this is now unknown, which makes the
+			// question split incomplete rather than wrong.
+			p.tr.UnreadableUserRecords++
+			unreadable = true
 		}
 	}
 	blocks, plain := decodeBlocks(msg.Content)
@@ -273,11 +347,15 @@ func (p *parser) addUser(rec rawRecord, lineNo int) {
 	payload, hasPayload := parseToolUseResult(rec.ToolUseResult)
 
 	var textParts []string
-	handled := false
+	handled, media, stopped := false, false, false
 	for _, b := range blocks {
+		if b.Type == "image" || b.Type == "document" {
+			media = true
+		}
 		if b.Type == "tool_result" {
 			handled = true
 			p.addToolResult(rec, b, payload, hasPayload, lineNo)
+			stopped = stopped || interrupted(blockText(b))
 			continue
 		}
 		if t := blockText(b); t != "" {
@@ -288,8 +366,23 @@ func (p *parser) addUser(rec rawRecord, lineNo int) {
 		textParts = append(textParts, plain)
 	}
 
+	// An interruption is recorded once per record, independently of what the
+	// record's message is: as a marker line, or in the tool result payload.
+	for _, t := range textParts {
+		stopped = stopped || interrupted(t)
+	}
+	if hasPayload {
+		stopped = stopped || payload.Interrupted ||
+			(!payload.Structured && strings.Contains(payload.Text, interruptMarker))
+	}
+
 	text := strings.Join(textParts, "\n")
 	if text == "" && handled {
+		if stopped && len(p.tr.Events) > 0 {
+			// No message of its own: the signal goes on the last tool result
+			// this record produced.
+			p.tr.Events[len(p.tr.Events)-1].Signal = trace.TurnInterrupted
+		}
 		return
 	}
 
@@ -304,6 +397,29 @@ func (p *parser) addUser(rec rawRecord, lineNo int) {
 	}
 	if rec.IsCompactSummary || looksCompacted(text) {
 		ev.IsCompactSummary = true
+	}
+	if stopped {
+		ev.Signal = trace.TurnInterrupted
+	}
+
+	// Rule 1: text riding along with tool results annotates them. A record whose
+	// message could not be decoded is not known to be the person's, so it is
+	// treated as injected too; the reliability line counts it.
+	origin, display := trace.OriginInjected, ""
+	if !handled && !unreadable {
+		origin, display = classifyText(text, rec.IsMeta, ev.IsCompactSummary, media)
+	}
+	// Rule 2: a sidechain message is the parent agent talking to a subagent,
+	// unless the whole transcript is that subagent (finish).
+	if rec.IsSidechain {
+		if !handled {
+			p.candidates = append(p.candidates, candidate{event: len(p.tr.Events), origin: origin, display: display})
+		}
+		origin, display = trace.OriginInjected, ""
+	}
+	ev.Origin = origin
+	if origin.OpensQuestion() {
+		ev.Display = display
 	}
 	p.addEvent(ev, rec, lineNo)
 }
@@ -412,8 +528,19 @@ func (p *parser) addAssistant(rec rawRecord, lineNo int) {
 		usage, hasUsage = toUsage(rec.Usage)
 	}
 
-	reqIdx := -1
-	if hasUsage {
+	// A later line of a response that already opened a request is not a new
+	// request: counting it again would bill the same prompt once per content
+	// block. The line still becomes an event, because its text enters the
+	// context, but the request stays anchored on the first line, which is
+	// where the context it was sent with ends.
+	key := responseKey(msg.ID, rec.RequestID)
+	reqIdx, continued := -1, false
+	if key != "" {
+		if i, ok := p.reqByKey[key]; ok {
+			reqIdx, continued = i, true
+		}
+	}
+	if !continued && hasUsage {
 		reqIdx = len(p.tr.Requests)
 	}
 
@@ -423,39 +550,66 @@ func (p *parser) addAssistant(rec rawRecord, lineNo int) {
 	ev.Model = msg.Model
 	ev.RequestID = rec.RequestID
 	ev.MessageID = msg.ID
-	ev.RequestIndex = reqIdx
+	if !continued {
+		ev.RequestIndex = reqIdx
+	}
+	if rec.IsApiErrorMessage {
+		// The runtime's own record that the call failed.
+		ev.Signal = trace.TurnFailed
+	}
 	evIdx := p.addEvent(ev, rec, lineNo)
 
 	if msg.Model != "" && !containsString(p.tr.Models, msg.Model) {
 		p.tr.Models = append(p.tr.Models, msg.Model)
 	}
 
-	if hasUsage {
+	switch {
+	case continued:
+		r := &p.tr.Requests[reqIdx]
+		// The lines repeat the response's usage; when one differs, the later
+		// line is the more complete report (output grows as blocks stream).
+		if hasUsage {
+			if u := traceUsage(usage); u != r.Usage {
+				r.Usage = u
+			}
+		}
+		if msg.StopReason != "" {
+			r.StopReason = msg.StopReason
+		}
+	case hasUsage:
 		p.tr.Requests = append(p.tr.Requests, trace.Request{
-			Index:      reqIdx,
-			MessageID:  msg.ID,
-			RequestID:  rec.RequestID,
-			Model:      msg.Model,
-			Timestamp:  parseTime(rec.Timestamp),
-			StopReason: msg.StopReason,
-			EventIndex: evIdx,
-			Usage: trace.Usage{
-				InputTokens:              usage.InputTokens,
-				OutputTokens:             usage.OutputTokens,
-				CacheReadInputTokens:     usage.CacheReadInputTokens,
-				CacheCreationInputTokens: usage.CacheCreationInputTokens,
-				Ephemeral5mInputTokens:   usage.Ephemeral5mInputTokens,
-				Ephemeral1hInputTokens:   usage.Ephemeral1hInputTokens,
-				ServiceTier:              usage.ServiceTier,
-			},
+			Index:       reqIdx,
+			MessageID:   msg.ID,
+			RequestID:   rec.RequestID,
+			Model:       msg.Model,
+			Timestamp:   parseTime(rec.Timestamp),
+			StopReason:  msg.StopReason,
+			EventIndex:  evIdx,
+			Usage:       traceUsage(usage),
 			IsSidechain: rec.IsSidechain,
 			CWD:         rec.CWD,
 			GitBranch:   rec.GitBranch,
 		})
+		if key != "" {
+			p.reqByKey[key] = reqIdx
+		}
 	}
 
 	for _, b := range toolBlocks {
 		p.addToolUse(rec, b, reqIdx, lineNo)
+	}
+}
+
+// traceUsage converts the raw counters into the trace model's usage.
+func traceUsage(u usageOut) trace.Usage {
+	return trace.Usage{
+		InputTokens:              u.InputTokens,
+		OutputTokens:             u.OutputTokens,
+		CacheReadInputTokens:     u.CacheReadInputTokens,
+		CacheCreationInputTokens: u.CacheCreationInputTokens,
+		Ephemeral5mInputTokens:   u.Ephemeral5mInputTokens,
+		Ephemeral1hInputTokens:   u.Ephemeral1hInputTokens,
+		ServiceTier:              u.ServiceTier,
 	}
 }
 
@@ -549,6 +703,45 @@ func (p *parser) finish() {
 	}
 
 	sort.Strings(p.tr.Models)
+	p.finishOrigins()
+}
+
+// finishOrigins settles the two classifications that need the whole file.
+func (p *parser) finishOrigins() {
+	events := p.tr.Events
+	newFormat, mainThread := false, false
+	for i := range events {
+		ev := &events[i]
+		if ev.Kind != trace.KindUserMessage {
+			continue
+		}
+		if ev.Origin == trace.OriginCommand {
+			newFormat = true
+		}
+		if !ev.IsSidechain {
+			mainThread = true
+		}
+	}
+	// A file that writes commands as user records also echoes them as system
+	// records; counting both would open every command twice.
+	if newFormat {
+		for i := range events {
+			if events[i].Kind == trace.KindSystem {
+				events[i].Origin, events[i].Display = trace.OriginUnclassified, ""
+			}
+		}
+	}
+	// A transcript that is all sidechain is a subagent analysed on its own: its
+	// first message is the question it was given.
+	if !mainThread {
+		for _, c := range p.candidates {
+			if c.origin.OpensQuestion() {
+				events[c.event].Origin = c.origin
+				events[c.event].Display = c.display
+				break
+			}
+		}
+	}
 }
 
 func sortedKeys(m map[string]bool) []string {

@@ -45,7 +45,7 @@ a security issue, even if nothing crashes:
 | **The stored history is a report.** Each file under `~/.aiprobe/analyses/` is byte-identical to `aiprobe --json`, so the two rows below cover it as well. | Anything in the store that would not be allowed in a report, or a store file left readable by other users (they are written `0600`). |
 | **Loopback only.** `aiprobe serve` binds a loopback address and refuses anything else. | Any path that gets it listening on a routable interface, or serves a file outside the sessions it lists. |
 | **No secrets in reports.** Excerpts pass a credential scrubber before reaching a report. | A token, key or password reaching a report file, terminal output, or the HTML page. |
-| **No prompt content in reports.** Reports carry counts, fingerprints, paths, tool names and short excerpts. | Prompt text, file contents or command output appearing in a report. |
+| **No prompt content in files by default.** A report file carries counts, fingerprints, paths, tool names, session titles and short excerpts. A one-line, scrubbed preview of each question is shown in the terminal and on the local pages, and goes into a file only when it is written with `--prompt-preview`; the stored history never holds one. Session titles are the runtime's own, and some runtimes (Codex) title a session with the first line of its first message. | Prompt text, file contents or command output appearing in a file written without `--prompt-preview`; a question preview in the stored history or in a `serve` download; a preview that did not pass the credential scrubber. |
 | **No telemetry.** Nothing is collected or reported. | Any collection, counting or phoning home. |
 
 Several of these are enforced by tests rather than by review, so a regression
@@ -91,7 +91,7 @@ explicitly ask for, so it is documented rather than incidental:
 
 ```
 ~/.aiprobe/
-├── index.json            one record per analysis: identity, timing, headline figures
+├── index.json            one record per analysis: identity, timing, headline figures, cost row
 ├── analyses/<id>.json     the full report, byte-identical to aiprobe --json
 └── pricing.json           your token prices, only if you ran `aiprobe pricing --init`
 └── paths.json             where to look for sessions, only if you ran `aiprobe runtimes --init`
@@ -100,6 +100,14 @@ explicitly ask for, so it is documented rather than incidental:
 - Each stored analysis **is** a report. It contains counts, fingerprints, file
   paths, tool names and short scrubbed excerpts, and nothing a report would not
   contain. No prompt text, no file contents, no command output.
+- Question previews are never written here, whatever flags a command was given:
+  the store uses the same JSON writer as a report file written without
+  `--prompt-preview`, which drops them.
+- Each record in `index.json` keeps the session's title as the runtime gave it,
+  and a cost row copied from the analysis (cost, credits, token totals, question
+  count, the costliest question's share). A runtime's title can quote the first
+  message: Codex titles a session with the first line of its first message, so the
+  `title` stored for a Codex session is exactly that line.
 - Files are written `0600`, through a temporary file and a rename, so an
   interrupted run cannot leave a partial file behind.
 - The history is capped at 500 analyses; the oldest are evicted with their files.
@@ -110,6 +118,26 @@ explicitly ask for, so it is documented rather than incidental:
 
 Reading it needs no special tooling: it is JSON reports in a directory, so you can
 inspect or delete it with a text editor.
+
+## The local web interface
+
+`aiprobe serve` binds loopback only, as the table above says. Two of its routes are
+called back by the report page and get extra checks, because one returns question
+text and the other starts work:
+
+- `/report/previews` (the one-line previews of a session's questions) and
+  `/report/reanalyse` (re-run an analysis that predates the questions panel) answer
+  only a request whose `Host` is literally `localhost`, a loopback address or the
+  `--host` the server was started with. There is no DNS lookup, so a page that
+  rebinds its own domain to `127.0.0.1` cannot read them. Re-analysis is a POST, and
+  it also refuses an `Origin` other than the server's own, `null` included.
+- Previews live only in the server process's memory, in a small cache that a
+  refresh empties. They are never written to the history or to a download.
+- Loopback is reachable by every account on the machine, not only yours, and the
+  previews route has no authentication. On a machine other people can log in to,
+  any local account could read the scrubbed one-line previews of every session the
+  server lists; run `aiprobe serve --no-prompt-preview` there, which turns the
+  route off.
 
 ## The price file
 
@@ -151,6 +179,8 @@ See [docs/pricing.md](docs/pricing.md) for the format and for what the numbers m
   server binds loopback only, so the only client that can reach it is a process on
   your machine, which already has filesystem access to everything the server can
   read. A password there would add a step without adding a boundary. If you find a
-  way to reach it from off-machine, *that* is very much in scope.
+  way to reach it from off-machine, *that* is very much in scope. On a machine
+  shared with other accounts, see [the local web interface](#the-local-web-interface)
+  for what they can reach and how to turn it off.
 - Wrong numbers. An incorrect estimate is a bug, and worth reporting as one, but it
   is not a security issue. Use a normal issue.

@@ -76,9 +76,56 @@ const (
 	itemFunctionCallOut = "function_call_output"
 )
 
-// payload.type values inside an event_msg. Only usage is of any interest; the
-// rest are UI notifications.
-const evtTokenCount = "token_count"
+// payload.type values inside an event_msg. Usage and the turn boundaries are of
+// interest; the rest are UI notifications.
+const (
+	evtTokenCount   = "token_count"
+	evtTaskStarted  = "task_started"
+	evtTaskComplete = "task_complete"
+	evtTurnAborted  = "turn_aborted"
+)
+
+// turnEvent is read only inside the task_started, task_complete and turn_aborted
+// branches. A shape mismatch means the field is absent; the line is still used.
+type turnEvent struct {
+	Error      json.RawMessage `json:"error"`
+	Reason     json.RawMessage `json:"reason"`
+	DurationMS json.RawMessage `json:"duration_ms"`
+}
+
+// stringOf returns raw as a string when it is a JSON string, and "" for any
+// other shape. A field that changed shape reads as absent; it never costs the
+// line it sits on.
+func stringOf(raw json.RawMessage) string {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed[0] != '"' {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(raw, &s) != nil {
+		return ""
+	}
+	return s
+}
+
+// marked reports whether a marker field is set: present, not null and not "".
+func marked(raw json.RawMessage) bool {
+	trimmed := strings.TrimSpace(string(raw))
+	return trimmed != "" && trimmed != "null" && trimmed != `""`
+}
+
+// millis reads a duration in milliseconds written as an integer or a float.
+func millis(raw json.RawMessage) (time.Duration, bool) {
+	var n json.Number
+	if len(raw) == 0 || json.Unmarshal(raw, &n) != nil {
+		return 0, false
+	}
+	f, err := n.Float64()
+	if err != nil || f < 0 {
+		return 0, false
+	}
+	return time.Duration(f * float64(time.Millisecond)), true
+}
 
 // envelope is one JSONL line.
 type envelope struct {

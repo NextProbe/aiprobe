@@ -20,6 +20,7 @@ so. Correcting a rate takes two numbers.
 - [What "recoverable" is worth](#what-recoverable-is-worth)
 - [When the cost is unknown](#when-the-cost-is-unknown)
 - [When there are no counters](#when-there-are-no-counters)
+- [What each question cost](#what-each-question-cost)
 - [Currencies](#currencies)
 - [Turning it off](#turning-it-off)
 - [Reading the JSON](#reading-the-json)
@@ -289,14 +290,15 @@ present:
 
 | Reason | Meaning | What to do |
 | --- | --- | --- |
-| `no_token_counters` | The runtime reports no token usage, so the counts and the cache split are derived. | Read the modelled figure; treat it as a floor. |
-| `billed_in_credits` | The runtime bills in its own units, which are reported as themselves. | Read the credit figure and the modelled dollar figure. |
+| `no_token_counters` | The runtime reports no token usage, so the counts and the cache split are derived. | Read the modelled figure as a floor on the list-price cost. |
+| `billed_in_credits` | The runtime bills in its own units, which are reported as themselves. | Audit by the credit figure, which is the charge. The modelled dollar figure beside it is a list-price estimate, not the bill. |
 | `no_price_for_model` | Only when you have switched the generic rate off. The model is named. | Add its rate, or turn the fallback back on. |
 
 ## When there are no counters
 
-Claude Code and Codex CLI report real token counters, so their cost is measured.
-Kiro, Kiro CLI and Cursor do not. For those the cost is **modelled** from the
+Claude Code and Codex CLI report real token counters, so their cost is measured, and
+so is a Kiro CLI session whose sidecar has token counts. Kiro, Kiro CLI sessions whose
+sidecar has none, and Cursor do not. For those the cost is **modelled** from the
 transcript rather than read off it:
 
 ```
@@ -319,27 +321,101 @@ that makes a reader distrust the rest of the report. The uncached reading is sti
 computed and reported, but as the upper bound it always was:
 
 ```
-   Treat it as a floor. Cache entries expire, and a session with long gaps
-   re-pays full price after each one, which this does not model. At the other
-   extreme, nothing cached at all would have cost ~$5,367.70. An actively used
-   session sits near the lower figure.
+   Treat it as a floor on the list-price cost. Cache entries expire, and a
+   session with long gaps re-pays full price after each one, which this does
+   not model. At the other extreme, nothing cached at all would have cost
+   ~$5,367.70. An actively used session sits near the lower figure.
 ```
 
-So the modelled figure is a floor and the ceiling is the roof, both are shown, and the
-assumption between them is stated rather than hidden. What is *not* modelled:
+So the modelled figure is a floor on what the tokens cost at list prices, the ceiling
+is the roof, both are shown, and the assumption between them is stated rather than
+hidden. What is *not* modelled:
 
 - **Cache expiry.** A provider cache has a short time to live, so the first request
   after a long gap re-pays full price. This counts it as a cheap read, which is why the
-  figure is a floor.
+  figure is a floor on the list-price cost.
 - **Completions.** A runtime that reports no input counters does not report output
   either, so output tokens are left at zero rather than invented.
 
 The credit figure is reported alongside, untouched. The two are independent facts — one
 is the runtime's own exact accounting, the other is derived tokens at a published rate —
-and neither is converted into the other.
+and neither is converted into the other. Only one of them is the bill, so where the
+runtime reports credits (Kiro, Kiro CLI) the cost section says so right after the
+credit figure:
+
+```
+   This amount is a list-price model, not the bill: on long sessions it can
+   run well above what the runtime actually charged. The credits above are
+   that charge, so audit this session by its credits.
+```
+
+That is also why, in a session the runtime charged turn by turn, the questions are
+ordered, and their shares taken, by credits rather than by this figure; see
+[what each question cost](#what-each-question-cost).
 
 A session where some requests could be priced and others could not is reported as
 `partial`, and its total is labelled a floor.
+
+## What each question cost
+
+Section 6 of the report splits a session's cost by the questions a person asked:
+every request belongs to one question, or to the *before the first question* or
+*unattributed* bucket. How a question is priced depends on what the runtime reports.
+
+**With counters (Claude Code, Codex CLI, and Kiro CLI when its sidecar has token
+counts)** each request is priced on its own, with the same four rates and discount as
+the session, and a question's cost is the sum of its requests. A request that carries
+no counters of its own (a Kiro CLI turn's counts can land on a neighbouring request)
+is not priced as zero: the question is marked as a floor (`≥`), or unknown if none of
+its requests were counted.
+
+**Without counters (Kiro, and Kiro CLI sessions whose sidecar has no token counts)**
+the session's modelled cache writes `W` and cache reads `R` from
+[the section above](#when-there-are-no-counters) are apportioned to questions, by the
+largest-remainder method so that each class adds up exactly:
+
+- a question's **write** weight is the context its requests sent for the first time,
+  plus content charged once because the runtime dropped it after one prompt;
+- its **read** weight is the context its requests sent again.
+
+So a write is counted at the request that first sends the content, a read at each
+request that re-sends it, which is where a provider with counters would put them,
+and a question with no requests gets no modelled cost. A question's write + read can
+differ slightly from its context exposure: summed over the session those differences
+are at most twice the content that was never sent at all (the last answer, anything
+dropped by a compaction before it was sent). Session totals are exact either way.
+When the one-off inserted content is not smaller than the cumulative exposure, the
+session counts no reads, and every modelled token is apportioned as a write. With
+`--no-cost` the token figures are identical; only the money is gone.
+
+**No figure.** A session with no cost (Cursor, which records no model) gives its
+questions an unknown cost, not zero, and ranks them by context exposure instead. A
+session that is partly priced marks the affected questions `≥`.
+
+**Credits** are the runtime's own charge and are never converted. Where the runtime
+records a charge per turn (Kiro, Kiro CLI), each question carries the charges of the
+turns attributed to it; a question with a turn that reported none shows a floor (`≥`)
+and says so. Where it records only a session total, the credits stay in the
+unattributed bucket rather than being split by a guess. An omitted value means
+unknown, never 0.
+
+**Order and shares.** A session's questions are ordered by the first figure it can be
+ranked by: the runtime's per-turn credits where it charged each turn, then cost, then
+context exposure. Credits come first because they are the bill, while a dollar figure
+beside them is AIProbe's list-price estimate, and in a session without counters a
+modelled one that can run well above the charge on long sessions; the note under the
+table says so. Each question's share is a share of the same thing: of the session's
+credits when it was charged per turn (the column reads `% cred`), else of its cost,
+else of its context exposure. A session whose per-turn credits add up to zero falls
+back to cost. `--sort` only reorders the rows: the share keeps the session's basis,
+and so does the costliest question named in `summary.top` and in the cost ranking.
+
+**Reconciliation.** Per-question costs, every token class and credits sum to the
+session's own figures: integers exactly, money to within 1e-9 × max(1, total). The
+**Total** line shows the session total itself rather than a
+sum of rounded rows, so it always matches the cost section. Should a per-question sum
+ever fail to match, the class is re-apportioned and the report says so in a note: that
+note is a bug in AIProbe, and worth reporting.
 
 ## Currencies
 
@@ -377,7 +453,7 @@ The `spend` object carries the figures and their provenance:
 | `recoverable` | What the waste was worth. `estimated` is always true. |
 | `prompt_tokens`, `prompt_cost` | The context side of the bill, excluding completions. |
 | `effective_input_rate` | The blended rate described above, per million tokens. |
-| `modelled` | The counts and cache split were derived, not measured. The figure is a floor. |
+| `modelled` | The counts and cache split were derived, not measured. The figure is a floor on the list-price cost, not the bill; where the runtime reports credits, those are the charge. |
 | `ceiling`, `ceiling_tokens` | The all-uncached upper bound, present when `modelled` is set. |
 | `by_model` | One row per model charged, with its own usage, cost and four rates. |
 | `unpriced_models` | Models used with no rate on file, only possible with the fallback off. |
@@ -392,6 +468,35 @@ The `spend` object carries the figures and their provenance:
 Every `Cost` object carries `estimated`, and cost inherits the provenance of the
 tokens it was computed from: estimated tokens produce an estimated cost, and the
 renderers mark it the same way they mark an estimated token count.
+
+The `questions` object is the per-question split. A report that has the key was
+written by a build with per-question data; one without it comes from an earlier
+build. The schema string is the same for both.
+
+| Field | Meaning |
+| --- | --- |
+| `count` | How many questions the session has. 0 with a single bucket when nobody wrote anything, or when the split is unavailable. |
+| `reliability`, `reliability_reason` | `reliable`, `incomplete` or `unavailable`, and why. |
+| `default_sort` | `credits`, `cost` or `tokens`: the session's default order. `credits` when the runtime charged each turn and the session's credits are above zero; otherwise `cost` when a question has a known cost, `credits` for a per-turn session without one, else `tokens`. |
+| `share_basis` | `credits`, `cost` or `exposure`: what `items[].share` is a share of, in that order of preference (`credits` only for a session charged per turn with credits above zero). It is the session's basis, whatever `--sort` says. Absent when there is none. |
+| `credit_status` | `per_turn`, `session_only` or `unavailable` for a runtime that bills in its own units; absent otherwise. |
+| `unreported_usage` | Token classes this runtime never reports, so a 0 there means "not reported". |
+| `items[]` | The questions (`number` 1..n) and any non-empty bucket (`number` 0, `kind` `before_first` or `unattributed`), always in time order. Each has `requests`, `request_indexes`, `tool_calls`, `tokens` (the four classes), `exposure`, `cost`, `share` (unrounded), `credits` (omitted = unknown), the `*_partial` floor markers and the runtime's flags. |
+| `requests[]` | One row per request, by index: the segment it belongs to, its own `usage` (counter sessions) or `context` (modelled sessions), its unrounded `cost` and the tools it called. |
+| `summary` | The session's cost row: the same figures the cost ranking and the analysis history show for it. `summary.credit_status` repeats `credit_status`, so a list can tell a session charged per turn from the rest; `summary.questions_unknown` marks a session that could not be split, whose question count is unknown rather than 0; `summary.top` names the costliest segment, its `share` and the `basis` of that share. |
+| `previews_included` | Present only in a file written with `--prompt-preview`, whose questions then carry `preview`. |
+
+Per-question costs are unrounded, so a consumer can check that they add up to
+`spend.total`; display rounding happens in the renderers only.
+
+`aiprobe overview --json` carries the cost ranking. `ranking` holds one row per
+session: its identity, title, project, model, start and duration, its `summary`, and
+`pricing_differs` when it was priced with another currency or discount than the run.
+`ranking_sort` is the key the rows are ordered by once the default is resolved:
+`credits` when every row comes from one runtime and one of them was charged per turn,
+otherwise `cost`, `credits` or `tokens`, whichever the rows can be ranked by first. `ranking_modelled` is set when a
+row charged per turn shows a modelled, estimated cost; the note under the table
+appears then.
 
 ## See also
 

@@ -114,6 +114,7 @@
 
 <nav class="tabs" role="tablist" aria-label="{{T "tab.sections"}}">
   <button class="tab" role="tab" data-target="panel-summary" aria-selected="true" aria-controls="panel-summary">{{T "overview.tab.summary"}}</button>
+  <button class="tab" role="tab" data-target="panel-ranking" aria-controls="panel-ranking">{{T "overview.tab.ranking"}}<span class="count">{{len $o.Ranking}}</span></button>
   <button class="tab" role="tab" data-target="panel-habits" aria-controls="panel-habits">{{T "overview.tab.findings"}}<span class="count">{{len $o.Findings}}</span></button>
   <button class="tab" role="tab" data-target="panel-sessions" aria-controls="panel-sessions">{{T "overview.tab.sessions"}}<span class="count">{{$o.Sessions}}</span></button>
   <button class="tab" role="tab" data-target="panel-tools" aria-controls="panel-tools">{{T "overview.tab.tools"}}</button>
@@ -220,6 +221,87 @@
     {{- else}}
     <p class="empty">{{T "overview.scores.none"}}</p>
     {{- end}}
+  </div>
+</section>
+
+{{/* ---------------- cost ranking ----------------
+     Every session by what it cost. The figures are each session's own, copied
+     from its analysis; this table adds nothing up. Served pages link each row to
+     that session's Questions panel; a standalone file has no server to link to,
+     so it names the path and the command instead. */}}
+<section class="panel" id="panel-ranking" role="tabpanel" aria-label="{{T "overview.tab.ranking"}}">
+  <div class="card">
+    <h2>{{T "overview.ranking.title"}}</h2>
+    <p class="sub">{{T "overview.ranking.intro"}} {{Targs "overview.ranking.right" "count" (len $o.Ranking) "key" (qsortlabel (print $o.RankingSort))}}</p>
+    {{- $rk := print $o.RankingSort}}
+    {{- $money := false}}{{range $o.Ranking}}{{if .Summary.Cost}}{{$money = true}}{{end}}{{end}}
+    {{- $credits := false}}{{range $o.Ranking}}{{if .Summary.Credits}}{{$credits = true}}{{end}}{{end}}
+    {{- $differs := false}}
+    {{- /* Compact so every column fits a laptop window: names and paths keep one
+           line and end in an ellipsis (the title attribute has the whole value),
+           dates do not wrap, and the scroll container is the safety net. */}}
+    <div class="tbl-scroll">
+    <table class="data rank-table">
+      <thead>
+        <tr>
+          <th class="sortable" data-numeric="true">{{T "questions.col.num"}}</th>
+          <th class="sortable">{{T "overview.col.session"}}</th>
+          <th class="sortable">{{T "history.col.runtime"}}</th>
+          {{- if $money}}
+          <th class="sortable" data-numeric="true" style="text-align:right"{{if eq $rk "cost"}} aria-sort="descending"{{end}}>{{T "overview.col.cost"}}</th>
+          {{- end}}
+          {{- if $credits}}
+          <th class="sortable" data-numeric="true" style="text-align:right"{{if eq $rk "credits"}} aria-sort="descending"{{end}}>{{T "overview.col.credits"}}</th>
+          {{- end}}
+          <th class="sortable" data-numeric="true" style="text-align:right"{{if eq $rk "tokens"}} aria-sort="descending"{{end}}>{{T "overview.col.context"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "overview.col.requests"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "overview.col.questions"}}</th>
+          <th class="sortable" data-numeric="true" style="text-align:right">{{T "overview.col.top"}}</th>
+          <th class="sortable" data-numeric="true"{{if eq $rk "time"}} aria-sort="descending"{{end}}>{{T "overview.col.started"}}</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {{- range $i, $row := $o.Ranking}}
+        {{- $s := $row.Summary}}
+        <tr>
+          <td class="num" data-sort="{{add $i 1}}">{{add $i 1}}</td>
+          <td>
+            {{- $idl := $row.SessionID}}{{if $row.Model}}{{$idl = printf "%s · %s" $row.SessionID (shortmodel $row.Model)}}{{end}}
+            <div class="ell"{{with tip $row.Title 22}} title="{{.}}"{{end}}>{{$row.Title}}</div>
+            <div class="est mono ell"{{with tip $idl 28}} title="{{.}}"{{end}}>{{$idl}}</div>
+          </td>
+          <td>{{$row.Adapter}}</td>
+          {{- if $money}}
+          <td class="num" data-sort="{{if not $row.PricingDiffers}}{{qcostsort $s.Cost}}{{end}}">{{if $s.Cost}}{{qcost $s.Cost $s.CostPartial}}{{if $row.PricingDiffers}}{{$differs = true}} <span class="tag warn" title="{{T "overview.ranking.differs"}}">≠</span>{{end}}{{else}}—{{end}}</td>
+          {{- end}}
+          {{- if $credits}}
+          <td class="num" data-sort="{{qfloatsort $s.Credits}}">{{if $s.Credits}}{{qcredits $s.Credits $s.CreditsPartial}}{{else}}—{{end}}</td>
+          {{- end}}
+          <td class="num" data-sort="{{qtoksort $s.Exposure}}">{{qtok $s.Exposure $s.TokensPartial}}</td>
+          <td class="num" data-sort="{{$s.Requests}}">{{$s.Requests}}</td>
+          {{- /* A session that predates the split, or could not be split, has no
+                 question count or top question: a dash, never 0, sorted last. */}}
+          {{- $unsplit := or $s.Legacy $s.QuestionsUnknown}}
+          <td class="num" data-sort="{{if not $unsplit}}{{$s.Questions}}{{end}}">{{if $unsplit}}—{{else}}{{$s.Questions}}{{end}}</td>
+          <td class="num" data-sort="{{if not $unsplit}}{{with $s.Top}}{{sortnum .Share}}{{end}}{{end}}">{{if $unsplit}}—{{else}}{{with $s.Top}}{{rtop .}}{{else}}—{{end}}{{end}}</td>
+          <td class="est when" data-sort="{{if $row.StartUnix}}{{$row.StartUnix}}{{end}}">{{ts $row.StartUnix}}</td>
+          {{- if $.ReportHref}}
+          <td style="white-space:nowrap"><a class="btn" href="{{reporthref $.ReportHref $row.ID}}#panel-questions">{{T "overview.open"}}</a></td>
+          {{- else}}
+          {{- /* The path is shortened on screen; the command beside it carries it
+                 whole and wraps anywhere, so it can always be copied. */}}
+          <td class="est rank-cmd"><span class="mono ell"{{with tip $row.Path 24}} title="{{.}}"{{end}}>{{$row.Path}}</span><span class="cmd">{{Targs "overview.ranking.analyze" "command" (printf "aiprobe analyze \"%s\"" $row.Path)}}</span></td>
+          {{- end}}
+        </tr>
+        {{- end}}
+      </tbody>
+    </table>
+    </div>
+    {{- if $differs}}<p class="note warn">{{T "overview.ranking.differs"}}</p>{{end}}
+    {{- /* The ~ amounts are estimates whatever the order; ordered by cost, the
+           note also points to the credits order. */}}
+    {{- if $o.RankingModelled}}<p class="note">{{if eq $rk "cost"}}{{T "overview.ranking.modelled.cost"}}{{else}}{{T "overview.ranking.modelled"}}{{end}}</p>{{end}}
   </div>
 </section>
 

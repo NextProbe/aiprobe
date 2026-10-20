@@ -174,8 +174,9 @@ func (p *printer) spend(res *analyzer.Result) {
 			"rate":   report.MoneyRate(s.FallbackRate, s.Currency),
 		})))
 	}
-	// A modelled figure assumes the cache held throughout, so it is a floor. Naming
-	// the other extreme is what makes the assumption checkable.
+	// A modelled figure assumes the cache held throughout, so it is a floor on the
+	// list-price cost. Naming the other extreme is what makes the assumption
+	// checkable.
 	if s.Modelled && s.Ceiling.Known {
 		p.wrap("   ", 3, p.dim(p.ta("spend.modelled.floor", i18n.Args{
 			"ceiling": report.Money(s.Ceiling),
@@ -185,6 +186,13 @@ func (p *printer) spend(res *analyzer.Result) {
 		p.wrap("   ", 3, p.dim(p.ta("spend.credits.short", i18n.Args{
 			"amount": fmt.Sprintf("%.2f", s.CreditAmount), "unit": s.CreditUnit,
 		})))
+		// Beside the runtime's own charge, a modelled amount must not read as the
+		// bill: it is list prices applied to derived tokens, and on long sessions
+		// it can sit well above what the runtime charged. Same rule as the HTML
+		// panel (template.gohtml).
+		if s.Modelled {
+			p.wrap("   ", 3, p.dim(p.t("spend.modelled.bill")))
+		}
 	}
 }
 

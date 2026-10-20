@@ -78,7 +78,7 @@ func Detect(path string) bool                      // discover.go
 后一种，`Discover` 就是负责枚举这些对话的地方，而一个裸路径必须选定其中一段并明说，而不是
 把多段混在一起。
 
-解析 JSON 是简单的部分。**有四个问题决定了产出的报告是否诚实**，值得在写任何代码之前先
+解析 JSON 是简单的部分。**有五个问题决定了产出的报告是否诚实**，值得在写任何代码之前先
 回答：
 
 1. **这个运行时是否按请求记录 provider token 用量？** 如果是，这些计数就是事实基准：设
@@ -103,6 +103,17 @@ func Detect(path string) bool                      // discover.go
    的。
 
    要守住的底线是：「无法验证」必须让读者看得见，而不是只记在能力表里。
+5. **哪些消息是人写的？** 提问章节在每一条由人写的消息处切开会话，而只有适配器能把这些
+   消息与运行时、hook 或工作流写进对话的内容区分开。完成分类后，设置
+   `Trace.Prompts = trace.PromptsClassified`，并给每个 user 角色的事件设置 `Origin`：人输入
+   的内容是 `prompt`、`command` 或 `shell`（它们会开启一个提问），运行时在每次提问前固定
+   写入的包装是 `preamble`，其余一律 `injected`。在 `Display` 里放人能认出来的文字（斜杠
+   命令连同参数，绝不放命令输出），在中断与失败的轮次上记 `Signal`；运行时上报自己的轮次
+   或逐轮计费时加上 `Turns`，只有当某一轮的计数确实挂在按位置推测的请求上时才用
+   `Start = -1`。适用时设置 `UnreportedUsage`、`UnreadableUserRecords` 与
+   `CreditsUnavailable`（附原因 id）。转录里新读的字段一律用 `json.RawMessage` 承载，在
+   需要它的分支里再解码，这样形状不符的字段只等于缺失，而不会让整行被跳过。一个什么都不
+   分类的适配器照样能用：报告把整个会话显示为一个桶，并说明拆分不可用。
 
 在开 pull request 之前：
 
@@ -112,6 +123,7 @@ func Detect(path string) bool                      // discover.go
 - [ ] 检测是结构性的、只读几行、并且不会在其他运行时的 fixture 上误判。
 - [ ] 无法解码的行被计数并跳过，绝不致命。
 - [ ] 缺失的量是 `OptInt`/`OptFloat` 的未知值，不是零，而且一路到 JSON 都是。
+- [ ] 每个 user 角色的事件都有 `Origin`，并且 `Trace.Prompts` 说明了它们是否已分类。
 - [ ] 测试覆盖：正常会话、被截断的文件、空文件、以及没有工具调用的会话。
 - [ ] **fixture 是合成的。** 绝不要提交真实转录文件：它们含有 prompt 和源代码。
 - [ ] 运行时已加入 `--adapter` 的帮助文本、以及 README 里的会话位置表格。

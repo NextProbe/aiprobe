@@ -7,10 +7,8 @@
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File scripts/screenshots.ps1
 #
-# Outputs, all under docs/screenshots/:
-#   terminal.png            colour-fidelity of `aiprobe demo` in a terminal
-#   dashboard-hero.png      first viewport of `aiprobe demo --html`
-#   dashboard-findings.png  the "What to change" section of the same report
+# Outputs: every PNG listed in docs/screenshots/README.md, all under
+# docs/screenshots/.
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -63,14 +61,14 @@ function Invoke-Chrome([string]$out, [string]$url, [int]$w, [int]$h, [int]$budge
     throw "Chrome did not write $out after 3 attempts"
 }
 
-# Build a fresh binary so the report reflects the current tree.
+# Build a fresh binary so the report reflects the current tree. Always, not
+# only when it is missing: a binary left over from an older checkout renders
+# the pages as they were, and nothing in the images says so.
 $binary = Join-Path $repo 'bin/aiprobe.exe'
-if (-not (Test-Path $binary)) {
-    Write-Host 'Building bin/aiprobe.exe...'
-    New-Item -ItemType Directory -Force -Path (Join-Path $repo 'bin') | Out-Null
-    & go build -o $binary .
-    if ($LASTEXITCODE -ne 0) { throw 'go build failed' }
-}
+Write-Host 'Building bin/aiprobe.exe...'
+New-Item -ItemType Directory -Force -Path (Join-Path $repo 'bin') | Out-Null
+& go build -o $binary .
+if ($LASTEXITCODE -ne 0) { throw 'go build failed' }
 
 $work = Join-Path $env:TEMP ("aiprobe-screenshots-" + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $work | Out-Null
@@ -159,7 +157,7 @@ try {
 
     $heroOut = Join-Path $outDir 'dashboard-hero.png'
     Write-Host 'Rendering dashboard-hero.png...'
-    Invoke-Chrome $heroOut ("file:///" + ($heroFile -replace '\\','/')) 1280 900
+    Invoke-Chrome $heroOut ("file:///" + ($heroFile -replace '\\','/')) 1280 950
 
     # ------------------------------------------------------------------ #
     # 3) dashboard-findings.png                                          #
@@ -193,7 +191,7 @@ try {
 
     $findingsOut = Join-Path $outDir 'dashboard-findings.png'
     Write-Host 'Rendering dashboard-findings.png...'
-    Invoke-Chrome $findingsOut ("file:///" + ($dashFindingsFile -replace '\\','/')) 1280 1600 1500
+    Invoke-Chrome $findingsOut ("file:///" + ($dashFindingsFile -replace '\\','/')) 1280 1650 1500
 
     # ------------------------------------------------------------------ #
     # 4) dashboard-<tab>.png for cache / mcp / dup / score               #
@@ -222,10 +220,10 @@ try {
     }
 
     $panels = @(
-        @{ id = 'panel-cache';  name = 'dashboard-cache.png';  h = 1400 },
-        @{ id = 'panel-mcp';    name = 'dashboard-mcp.png';    h = 1400 },
-        @{ id = 'panel-dup';    name = 'dashboard-dup.png';    h = 1400 },
-        @{ id = 'panel-score';  name = 'dashboard-score.png';  h = 1200 }
+        @{ id = 'panel-cache';  name = 'dashboard-cache.png';  h = 1450 },
+        @{ id = 'panel-mcp';    name = 'dashboard-mcp.png';    h = 1450 },
+        @{ id = 'panel-dup';    name = 'dashboard-dup.png';    h = 1450 },
+        @{ id = 'panel-score';  name = 'dashboard-score.png';  h = 1250 }
     )
     foreach ($p in $panels) {
         $out = Join-Path $outDir $p.name
@@ -247,7 +245,7 @@ try {
 
     $darkOut = Join-Path $outDir 'dashboard-hero-dark.png'
     Write-Host 'Rendering dashboard-hero-dark.png...'
-    Invoke-Chrome $darkOut ("file:///" + ($darkFile -replace '\\','/')) 1280 900
+    Invoke-Chrome $darkOut ("file:///" + ($darkFile -replace '\\','/')) 1280 950
 
     # Clean up the previous experiment: an identical "hero-light" file
     # confused earlier readers, since the default hero is already light.
@@ -255,15 +253,52 @@ try {
     if (Test-Path $legacyLight) { Remove-Item -Force $legacyLight }
 
     # ------------------------------------------------------------------ #
-    # 6) serve-sessions.png (the local web interface)                    #
+    # 6) dashboard-questions.png / dashboard-questions-zh.png            #
+    # ------------------------------------------------------------------ #
+    # The Questions panel with question 4 expanded to its requests. A file
+    # carries question previews only when asked, so this report is written
+    # with --prompt-preview; the demo's questions are synthetic, so nothing
+    # real can appear in them.
+    $questionsScript = @'
+<script>
+(function () {
+  function activate() {
+    var tab = document.querySelector('.tab[data-target="panel-questions"]');
+    if (tab) { tab.click(); }
+    var row = document.querySelector('.q-toggle[aria-controls="qd-4"]');
+    if (row) { row.click(); }
+    window.scrollTo(0, 0);
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function () { setTimeout(activate, 50); });
+  } else { setTimeout(activate, 50); }
+})();
+</script>
+'@
+    foreach ($q in @(@{ lang = 'en'; name = 'dashboard-questions.png' }, @{ lang = 'zh'; name = 'dashboard-questions-zh.png' })) {
+        $qSrc = Join-Path $work ('questions-' + $q.lang + '.html')
+        & $binary demo --html --prompt-preview --lang $q.lang -o $qSrc
+        if ($LASTEXITCODE -ne 0) { throw 'aiprobe demo --html --prompt-preview failed' }
+        $qRaw = [System.IO.File]::ReadAllText($qSrc, [System.Text.Encoding]::UTF8)
+        $qHtml = $qRaw.Replace('</head>', $sharedStyle + '</head>').Replace('</body>', $questionsScript + '</body>')
+        $qFile = Join-Path $work ('dashboard-questions-' + $q.lang + '.html')
+        [System.IO.File]::WriteAllText($qFile, $qHtml, $utf8bom)
+        Write-Host "Rendering $($q.name)..."
+        Invoke-Chrome (Join-Path $outDir $q.name) ("file:///" + ($qFile -replace '\\','/')) 1280 1760 1500
+    }
+
+    # ------------------------------------------------------------------ #
+    # 7) serve-*.png (the local web interface)                           #
     # ------------------------------------------------------------------ #
     # `aiprobe serve` renders the reader's real sessions -- with real
     # project paths, real session ids, real timestamps -- so screenshotting
     # it as-is would leak private information every time. Instead we start
     # the server in a sandbox: fresh env vars redirect every runtime and
     # $HOME to a scratch directory that contains one fake project holding
-    # the bundled demo session. The result is a serve page whose only
-    # content is the same synthetic data all the other screenshots use.
+    # the bundled demo session, plus two shorter sessions cut from it at
+    # question boundaries so the cost ranking has something to rank. The
+    # result is a serve page whose only content is the same synthetic data
+    # all the other screenshots use.
     #
     # The sandbox lives at a generic top-level path (never under the
     # developer's TEMP) because the Runtimes page prints the resolved
@@ -276,6 +311,22 @@ try {
     New-Item -ItemType Directory -Force -Path $fakeProject | Out-Null
     Copy-Item (Join-Path $repo 'internal/demo/testdata/demo-session.jsonl') `
         (Join-Path $fakeProject '9f3c71d2-4e8a-4c15-b7a0-2d6ef1a90b34.jsonl')
+
+    # The two cuts: the first N lines of the demo transcript under a new
+    # session id and title. Written as UTF-8 without a BOM, with LF endings,
+    # like the original.
+    $demoLines = [System.IO.File]::ReadAllLines((Join-Path $repo 'internal/demo/testdata/demo-session.jsonl'))
+    $demoId = '9f3c71d2-4e8a-4c15-b7a0-2d6ef1a90b34'
+    $demoTitle = 'Debug duplicate payment authorizations in orders-api'
+    $utf8 = New-Object System.Text.UTF8Encoding($false)
+    $cuts = @(
+        @{ id = '5e0b8a14-2f6c-4d3a-9b71-c8e2f4a6d019'; lines = 18; title = 'Find where the duplicate authorizations come from' },
+        @{ id = 'b7d2c9e3-8a41-4f05-a6e8-31f9c0b5e7a2'; lines = 21; title = 'Try the payments fix on the reasoning model' }
+    )
+    foreach ($cut in $cuts) {
+        $body = $demoLines[0..($cut.lines - 1)] | ForEach-Object { $_.Replace($demoId, $cut.id).Replace($demoTitle, $cut.title) }
+        [System.IO.File]::WriteAllText((Join-Path $fakeProject ($cut.id + '.jsonl')), (($body -join "`n") + "`n"), $utf8)
+    }
 
     $port = 17777
     $sandboxEnv = @{
@@ -294,8 +345,11 @@ try {
     $psi.FileName = $binary
     # Windows PowerShell 5.1's ProcessStartInfo has no ArgumentList; use the
     # legacy Arguments string. The values are known-safe (no spaces or
-    # quotes), so simple space-joining is enough.
-    $psi.Arguments = "serve --port $port --quiet --no-store"
+    # quotes), so simple space-joining is enough. No --no-store: the
+    # Sessions page reads each session's cost and questions from the store,
+    # and with $HOME redirected that store is inside the sandbox, which is
+    # deleted below.
+    $psi.Arguments = "serve --port $port --quiet"
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
@@ -315,6 +369,11 @@ try {
         }
         if (-not $ready) { throw "aiprobe serve did not respond on port $port" }
 
+        # Analyse every sandbox session once, through the aggregate the
+        # Sessions page's "Cost ranking" button opens. GET /overview waits
+        # for the job, and the analyses land in the sandbox's store.
+        Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$port/overview?adapter=all&lang=en" -TimeoutSec 120 | Out-Null
+
         $serveOut = Join-Path $outDir 'serve-sessions.png'
         Write-Host 'Rendering serve-sessions.png...'
         Invoke-Chrome $serveOut "http://127.0.0.1:$port/?lang=en" 1280 900
@@ -326,6 +385,32 @@ try {
         $serveOutZh = Join-Path $outDir 'serve-sessions-zh.png'
         Write-Host 'Rendering serve-sessions-zh.png...'
         Invoke-Chrome $serveOutZh "http://127.0.0.1:$port/?lang=zh" 1280 900
+
+        # The cost ranking, as the aggregate page shows it. Opened by URL,
+        # #panel-ranking scrolls the page to the panel and headless Chrome
+        # captures it half painted, so the page is saved and gets the same
+        # tab-clicking treatment as the dashboard images instead.
+        $rankingScript = @'
+<script>
+(function () {
+  function activate() {
+    var tab = document.querySelector('.tab[data-target="panel-ranking"]');
+    if (tab) { tab.click(); window.scrollTo(0, 0); }
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function () { setTimeout(activate, 50); });
+  } else { setTimeout(activate, 50); }
+})();
+</script>
+'@
+        foreach ($rank in @(@{ lang = 'en'; name = 'serve-ranking.png' }, @{ lang = 'zh'; name = 'serve-ranking-zh.png' })) {
+            $rankRaw = (Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$port/overview?adapter=all&lang=$($rank.lang)" -TimeoutSec 120).Content
+            $rankHtml = $rankRaw.Replace('</head>', $sharedStyle + '</head>').Replace('</body>', $rankingScript + '</body>')
+            $rankFile = Join-Path $work ('serve-ranking-' + $rank.lang + '.html')
+            [System.IO.File]::WriteAllText($rankFile, $rankHtml, $utf8bom)
+            Write-Host "Rendering $($rank.name)..."
+            Invoke-Chrome (Join-Path $outDir $rank.name) ("file:///" + ($rankFile -replace '\\','/')) 1280 1240 1500
+        }
     }
     finally {
         if ($server -and -not $server.HasExited) {

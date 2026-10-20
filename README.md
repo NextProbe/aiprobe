@@ -45,11 +45,13 @@ aiprobe demo --html -o demo.html && open demo.html   # or the dashboard
 aiprobe analyze          # then: your own most recent session
 ```
 
-The complete report that `demo` prints, all seven sections, is committed at
+The complete report that `demo` prints, all eight sections, is committed at
 [docs/demo-report.txt](docs/demo-report.txt). Every screenshot in this README
 (including the terminal one in the [gallery](#screenshot-gallery) at the
-bottom) comes from `aiprobe demo`, so they are reproducible with the scripts
-under [scripts/](scripts/) — nothing on your machine is required.
+bottom) comes from the bundled demo session — `aiprobe demo`, or `aiprobe serve`
+in a sandbox holding it and two shorter sessions cut from it — so they are
+reproducible with the scripts under [scripts/](scripts/), and nothing on your
+machine is required.
 
 ---
 
@@ -121,12 +123,15 @@ aiprobe runtimes --unset kiro      # go back to its default location
 aiprobe analyze                    # newest session for the current project
 aiprobe analyze kiro               # newest session of one runtime, by name
 aiprobe analyze path/to/session.jsonl
+aiprobe analyze --question 3       # one question, with every request it made
+aiprobe analyze --sort time        # the questions in the order they were asked
 aiprobe demo                       # bundled synthetic session
 aiprobe sessions                   # list transcripts on this machine
 aiprobe sessions --all             # every project, not just this directory
 
 aiprobe overview                   # every session for this project, aggregated
 aiprobe overview --adapter kiro --all
+aiprobe overview --all --sort cost # every session, ranked by what it cost
 aiprobe overview --all --html -o all.html
 
 aiprobe report --html              # single-file HTML dashboard
@@ -285,6 +290,10 @@ Run `aiprobe <command> --help` for the full flag list. The ones worth knowing:
 | `--discount 0.3` | Fraction off list prices, so `0.3` means you pay 70%. See [what it cost](#what-it-cost). |
 | `--currency EUR` | Relabel costs. No conversion is performed. |
 | `--no-cost` | Omit every money figure. |
+| `--sort cost\|credits\|tokens\|time` | Order of the questions table (`analyze`, `demo`, `report`) or of the session ranking (`overview`). By default credits where the runtime billed each turn (Kiro, Kiro CLI), otherwise money when there is a price, then credits, then context exposure; a ranking that mixes runtimes defaults to money. See [which question cost the most](#which-question-cost-the-most) and [which session cost the most](#which-session-cost-the-most). |
+| `--question N` | On `analyze` and `demo`, print only question N, with every request in it. |
+| `--prompt-preview` | On `analyze`, `demo` and `report`, include a one-line, credential-scrubbed preview of each question in `--json` and `--html` output. Off by default. |
+| `--no-prompt-preview` | On `analyze` and `demo`, leave the previews out of the terminal report; on `serve`, keep them off the pages. |
 
 ### What it cost
 
@@ -333,9 +342,10 @@ Two rules keep the numbers honest:
   naive calculation claimed a saving larger than the entire bill.
 
 A runtime that reports no token counters gets its cost **modelled** from the record
-instead of skipped. That covers Kiro and Kiro CLI: content is charged once on the way
-in and read back cheaply afterwards, and the breakdown already knows which is which,
-so the cache split is derived rather than guessed:
+instead of skipped. That covers Kiro, and Kiro CLI sessions whose sidecar has no
+token counts: content is charged once on the way in and read back cheaply
+afterwards, and the breakdown already knows which is which, so the cache split is
+derived rather than guessed:
 
 ```
    Session cost                          ~$546.76
@@ -343,9 +353,12 @@ so the cache split is derived rather than guessed:
    cache reads         1,071,802,507      $535.90
 ```
 
-That figure is a floor, because cache expiry is not modelled. The all-uncached reading
-is reported as the matching ceiling, and the runtime's own credit figure is passed
-through untouched. Nothing is converted into anything else.
+That figure is a floor on the list-price cost, because cache expiry is not modelled,
+and the all-uncached reading is reported as the matching ceiling. It is not the bill.
+Kiro and Kiro CLI charge in credits, which are passed through untouched, and on a
+long session the modelled dollars can run well above what was actually charged. The
+report says so beside the figure: audit a Kiro session by its credits. Nothing is
+converted into anything else.
 
 Cursor is the one case with no figure at all. It records neither token counts nor
 which model answered, so there is no rate to apply and no cost is shown — not a zero,
@@ -356,6 +369,62 @@ the **Prices** page of `aiprobe serve`, which also names the file to edit.
 
 Full detail, including the file format and the arithmetic, is in
 [docs/pricing.md](docs/pricing.md).
+
+### Which question cost the most
+
+A session total says what a conversation cost; section 6 of the report says which
+question in it did. AIProbe splits the session at every message a person wrote (a
+prompt, a slash command, a shell command) and gives each question the requests it
+set off, up to the next one:
+
+```
+ 6  QUESTIONS                                       4 question(s) · by cost
+────────────────────────────────────────────────────────────────────────────
+     Question                          Cost  Share Reqs Tools           Dur.
+  3  Try the reasoning model o…       $0.84    51%    1 Read              3s
+  4  I tightened the retry rul…       $0.43    26%    7 Bash×3 mcp…       2m
+  1  The payments worker is cr…       $0.21    13%    6 Read×4 Bas…       1m
+  2  Back. What did you find?         $0.17    10%    1                   0s
+  ──────────────────────────────────────────────────────────────────────────
+     Total                            $1.65   100%   15
+```
+
+```sh
+aiprobe analyze --question 3            # that question and every request in it
+aiprobe analyze --sort time --verbose   # every question in order, with its requests
+```
+
+- **The parts add up to the whole, exactly.** Every request belongs to one question
+  or to a labelled bucket: *before the first question* (work a resumed session did
+  before anyone typed) or *unattributed*. Per-question costs and every token class
+  sum to the session's own totals, and the Total line is the session total itself.
+- **Measured where the runtime measures.** Claude Code and Codex report counters per
+  request, so each question is priced request by request. Kiro, and Kiro CLI
+  sessions whose sidecar has no token counts, report none, so the session's
+  modelled cache writes and reads are apportioned to questions by the context each
+  one first sent and re-sent; see
+  [docs/pricing.md](docs/pricing.md#what-each-question-cost). Credits are split by
+  runtime turn where the runtime records them per turn, and shown for the session
+  otherwise.
+- **Ranked by what was billed.** Where the runtime charged each turn (Kiro, Kiro CLI),
+  the table is ordered by credits by default: they are the bill, and a dollar figure
+  beside them is AIProbe's list-price estimate, whose `~` amounts can run well above
+  the charge on long sessions. Otherwise it is ordered by cost, or by context
+  exposure when there is no price. The share column has the same basis (`% cred` on
+  a Kiro session), and `--sort` changes the order, never what the share is a share
+  of.
+- **How far the split can be trusted is stated.** A *Boundaries* line says whether
+  the question boundaries come from the runtime's own markers for who wrote each
+  message, or why they are incomplete.
+- **Previews stay out of files.** The terminal shows a scrubbed one-line preview of
+  each question; `--no-prompt-preview` hides it, for a shared screen. `--json` and
+  `--html` leave previews out unless you pass `--prompt-preview`, and the history
+  never stores them.
+
+The HTML report has the same table as a sortable **Questions** tab, and each row
+expands to the requests behind it:
+
+![HTML dashboard: the Questions panel, question 4 expanded to the seven requests behind it](docs/screenshots/dashboard-questions.png)
 
 ### Across all sessions
 
@@ -381,25 +450,78 @@ so a session whose MCP cost could not be measured never reads as clean.
 
 In the local web interface this is one click per runtime.
 
+### Which session cost the most
+
+The overview also ranks every session it covered by what it cost, in its section
+*Cost by session*: runtime, cost, credits (for a runtime that bills in its own
+units), context exposure, requests, questions, and the costliest question with the
+share it took: of the session's credits on a row the runtime charged per turn (Kiro,
+Kiro CLI), of its cost otherwise.
+
+```sh
+aiprobe overview --all                  # every session, costliest first
+aiprobe overview --adapter kiro --all   # one runtime: Kiro sessions by credits
+aiprobe overview --all --sort credits   # or by credits, tokens or time
+```
+
+Money is the default order, because it is the one unit every runtime shares. A
+ranking of one runtime that bills turn by turn (Kiro, Kiro CLI) is ordered by credits
+instead, since those are what it charged, so the order matches each session's own
+Questions table. When Kiro or Kiro CLI rows carry a modelled `~` cost, a note under
+the table says those amounts are estimates that can run well above the bill and that
+the rows' credits are the charge; ordered by cost, it also suggests sorting by
+credits. `--sort` changes only the order: each row's share keeps its own basis.
+
+A row's figures are copied from that session's own analysis, so they are always the
+numbers its report shows. The terminal lists the top rows (`--top N`, or all of them
+with `--verbose`). `--json` writes the rows as `ranking`, beside `ranking_sort` and
+`ranking_modelled`. The HTML has a **Cost ranking** tab that prints each row's path
+with the `aiprobe analyze` command that audits it, and in the local web interface
+the Sessions page links to the ranking and each row opens that session's Questions
+panel. The ranking never carries question previews.
+
+![aiprobe serve: the cost ranking, every session by what it cost](docs/screenshots/serve-ranking.png)
+
 ### The local web interface
 
 ```sh
-aiprobe serve            # http://127.0.0.1:7777
-aiprobe serve --open     # and open a browser
-aiprobe serve --lang zh  # start in Chinese
+aiprobe serve                      # http://127.0.0.1:7777
+aiprobe serve --open               # and open a browser
+aiprobe serve --lang zh            # start in Chinese
+aiprobe serve --no-prompt-preview  # no question previews on the pages
 ```
 
 Three pages, one navigation bar between them:
 
 | Page | What it is for |
 | --- | --- |
-| **Sessions** | every transcript on this machine, from every runtime, with one-click aggregates per runtime |
-| **History** | every analysis already run, one row per session, with a score sparkline showing whether it is improving |
-| **Overview** | the cross-session aggregate, the same thing `aiprobe overview` prints |
+| **Sessions** | every transcript on this machine, from every runtime, with the stored cost, credits and question count of each one already analysed, a link to the cost ranking, and one-click aggregates per runtime |
+| **History** | every analysis already run, one row per session, with its cost, credits and question count and a score sparkline showing whether it is improving |
+| **Overview** | the cross-session aggregate, the same thing `aiprobe overview` prints, including the cost ranking of every session; each row opens that session's Questions panel |
 
 Reports open **in the page**; the download buttons are for keeping a copy. The
 language switch stays on whatever page you are reading, and there is a light and
 dark theme that follows your system until you choose one.
+
+The Sessions and History columns are read from the stored index, never computed for
+the page, and a dash says why it is one: "— (earlier version)" for an analysis
+stored before the per-question split existed and, on the Sessions page,
+"— (older analysis)" when only an analysis of an earlier state of the file, or by
+another build, is stored, and "— (not analysed)" when there is none. A cost stored
+with another currency or discount than the server uses is marked `≠` rather than
+compared. A report's Questions panel fills in each question's one-line preview after
+the page has rendered; the previews are held in the server's memory only and never
+written to a download or to the history.
+
+A one-click aggregate fills those dashes in. It treats a stored analysis without the
+per-question split as stale: it re-analyses that session once and replaces the
+entry, so the ranking has every session's questions and the next aggregate reuses
+the result. A report page does not re-analyse by itself: an analysis stored before
+the panel existed, by a build with the same version string, shows a **Re-analyse**
+button in place of the panel. `--no-cost` and `--no-store` keep their meaning here:
+without prices a stored priced analysis is neither shown nor replaced, and without a
+store nothing is read or written. `aiprobe overview` on the command line analyses
+every session afresh and never reads or writes the history.
 
 Analyses are [stored locally](#what-aiprobe-writes), so opening a report,
 switching language and going back cost one analysis between them rather than three.
@@ -421,6 +543,9 @@ It is a **local GUI, not a service**:
 - No authentication, because there is nothing to authenticate. The only reachable
   client is a process on this machine, which already has filesystem access to
   everything the server can read. A password here would be theatre.
+- Loopback is reachable by every account on the machine, not only yours, and the
+  previews route answers whoever asks. On a machine other people can log in to,
+  run `aiprobe serve --no-prompt-preview`.
 - No account, no server-side database, no outbound connection. The only state it
   keeps is the analysis history, in plain JSON you can read and delete yourself.
 
@@ -567,9 +692,13 @@ AIProbe is local-first and read-only, by construction:
   build if one appears. No update check, no license check, no CDN in the HTML
   output.
 - **No telemetry.** Nothing is collected, counted or phoned home.
-- **Your prompts stay put.** No prompt text, file content or command output is
-  written into any report. Reports contain counts, fingerprints, file paths, tool
-  names and short excerpts.
+- **Your prompts stay put.** Report files carry no prompt text, file content or
+  command output by default: counts, fingerprints, file paths, tool names, session
+  titles and short excerpts. The terminal and the local pages show a scrubbed
+  one-line preview of each question; a file includes them only when written with
+  `--prompt-preview`, and the analysis history never stores them. Session titles
+  are the runtime's own, and some runtimes (Codex) title a session with the first
+  line of its first message.
 - **No secrets recorded.** Every excerpt passes through a credential scrubber
   before it can reach a report file, and shell commands are scrubbed at capture.
 - **No API key.** No LLM is called, for analysis, scoring or recommendations.
@@ -591,14 +720,15 @@ every page load. It holds:
 
 ```
 ~/.aiprobe/
-├── index.json            one record per analysis: identity, timing, headline figures
+├── index.json            one record per analysis: identity, timing, headline figures, cost row
 ├── analyses/<id>.json     the full report, byte-identical to aiprobe --json
 └── pricing.json           your token prices, only if you ran `aiprobe pricing --init`
 └── paths.json             where to look for sessions, only if you ran `aiprobe runtimes --init`
 ```
 
 Each stored analysis *is* a report, so it contains exactly what the bullets above
-say a report contains, and nothing more. Files are written with mode `0600`, the
+say a report contains, and nothing more: question previews are never stored,
+whatever flags a command was given. Files are written with mode `0600`, the
 history is capped at 500 analyses, and re-analysing an unchanged session replaces
 its entry rather than adding another.
 
@@ -731,9 +861,10 @@ with [CONTRIBUTING.md](CONTRIBUTING.md) ([中文](CONTRIBUTING.zh-CN.md)).
 
 ## Screenshot gallery
 
-Every screenshot below comes from the bundled synthetic demo session — either
-`aiprobe demo` (terminal) or `aiprobe demo --html` (dashboard). Regenerate them
-with `scripts/screenshots.ps1` (Windows) or `scripts/screenshots.sh`
+Every screenshot below comes from the bundled synthetic demo session —
+`aiprobe demo` (terminal), `aiprobe demo --html` (dashboard), or `aiprobe serve` in
+a sandbox that holds only synthetic sessions (the local web interface). Regenerate
+them with `scripts/screenshots.ps1` (Windows) or `scripts/screenshots.sh`
 (macOS/Linux).
 
 ### The local web interface
@@ -742,7 +873,7 @@ with `scripts/screenshots.ps1` (Windows) or `scripts/screenshots.sh`
 history, and running one-click cross-runtime aggregates. Reports open in the
 page; the language switch stays on whatever page you are reading.
 
-![aiprobe serve: Sessions page with per-runtime aggregates](docs/screenshots/serve-sessions.png)
+![aiprobe serve: Sessions page with each session's stored cost and question count, and per-runtime aggregates](docs/screenshots/serve-sessions.png)
 
 ![aiprobe serve: Runtimes page showing each supported runtime and what it reports](docs/screenshots/serve-runtimes.png)
 
@@ -797,7 +928,7 @@ in [docs/scoring.md](docs/scoring.md) — no model is involved.
 
 ### The terminal report
 
-If you prefer the CLI, `aiprobe demo` prints the same seven sections without
+If you prefer the CLI, `aiprobe demo` prints the same eight sections without
 opening a browser:
 
 ![aiprobe demo terminal output](docs/screenshots/terminal.png)

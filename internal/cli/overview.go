@@ -39,8 +39,12 @@ redundancy and nothing would be recovered by "fixing" it.
 By default only sessions recorded for the current directory are included. Use
 --all for every project on this machine.
 
+The cost ranking lists every session by what it cost, so the one worth auditing
+is the first row; --sort orders it by cost, credits, tokens or time instead.
+
 Examples:
   aiprobe overview
+  aiprobe overview --all --sort cost
   aiprobe overview --adapter kiro --all
   aiprobe overview --adapter kiro --html -o kiro.html
   aiprobe overview --all --json > overview.json
@@ -77,6 +81,7 @@ Examples:
 		},
 	}
 	f.register(cmd, true)
+	f.registerSort(cmd, true)
 	cmd.Flags().BoolVar(&allProjects, "all", false, "include sessions from every project, not just this directory")
 	return cmd
 }
@@ -126,9 +131,17 @@ func buildOverview(cmd *cobra.Command, rows []sessionRow, f *commonFlags) *overv
 		}
 	}
 
+	// The ranking compares sessions by money only when they were priced the way
+	// this run prices them, and carries none when pricing is off.
+	var prices *overview.PriceRef
+	if tab := f.priceTable(); tab != nil {
+		prices = &overview.PriceRef{Currency: tab.Currency(), Discount: tab.Discount()}
+	}
 	return overview.Build(inputs, failures, overview.Options{
 		Adapter: adapter,
 		TopN:    f.topN * 4, // HTML and JSON have room; the terminal caps again
+		Prices:  prices,
+		Sort:    analyzer.SortKey(f.sortKey),
 	})
 }
 

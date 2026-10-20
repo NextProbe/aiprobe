@@ -11,6 +11,7 @@ package redact
 import (
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 type rule struct {
@@ -66,6 +67,32 @@ func Excerpt(s string, max int) string {
 	s = strings.ReplaceAll(s, "\r", "")
 	s = strings.ReplaceAll(s, "\n", " ⏎ ")
 	s = strings.ReplaceAll(s, "\t", " ")
+	s = strings.Join(strings.Fields(s), " ")
+	return Truncate(s, max)
+}
+
+// SingleLine prepares session text for a one-line preview that may reach a
+// terminal or a page. The order is load-bearing:
+//
+//  1. Invisible characters go first and are replaced by nothing, so a credential
+//     that a control, bidirectional or zero-width character had split is whole
+//     again before the rules see it.
+//  2. Redaction runs on the whole text, before anything is cut, so a credential
+//     straddling the cut is never shown in part.
+//  3. Every run of whitespace, line and paragraph separators included, becomes
+//     one space.
+//  4. The result is truncated to max runes.
+func SingleLine(s string, max int) string {
+	s = strings.Map(func(r rune) rune {
+		switch {
+		case unicode.IsSpace(r): // \t \n \v \f \r, NEL, U+2028, U+2029, …
+			return ' '
+		case unicode.IsControl(r), unicode.Is(unicode.Cf, r):
+			return -1 // C0, DEL, C1 (ESC included); bidi, zero-width and other format characters
+		}
+		return r
+	}, s)
+	s = Text(s)
 	s = strings.Join(strings.Fields(s), " ")
 	return Truncate(s, max)
 }

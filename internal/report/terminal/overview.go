@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
+	"github.com/NextProbe/aiprobe/internal/analyzer"
 	"github.com/NextProbe/aiprobe/internal/analyzer/overview"
 	"github.com/NextProbe/aiprobe/internal/analyzer/rules"
 	"github.com/NextProbe/aiprobe/internal/i18n"
@@ -34,6 +36,7 @@ func WriteOverview(w io.Writer, o *overview.Report, opts Options) error {
 	p.overviewBreakdown(o)
 	p.overviewScores(o)
 	p.overviewFindings(o)
+	p.overviewRanking(o)
 	p.overviewSessions(o)
 	p.overviewTools(o)
 	p.overviewFooter(o)
@@ -382,7 +385,7 @@ func (p *printer) overviewSessions(o *overview.Report) {
 	if len(o.Worst) == 0 {
 		return
 	}
-	p.section(4, p.t("overview.sessions.title"), p.ta("serve.count", i18n.Args{"count": o.Sessions}))
+	p.section(5, p.t("overview.sessions.title"), p.ta("serve.count", i18n.Args{"count": o.Sessions}))
 
 	const (
 		minNameW = 14
@@ -482,7 +485,7 @@ func (p *printer) overviewTools(o *overview.Report) {
 	if len(o.Tools) == 0 {
 		return
 	}
-	p.section(5, p.t("overview.tools.title"), "")
+	p.section(6, p.t("overview.tools.title"), "")
 
 	const (
 		minNameW = 14
@@ -539,6 +542,157 @@ func (p *printer) overviewTools(o *overview.Report) {
 		row += p.categoryColor(t.Class.Category(), padLeftW("~"+report.Int(t.BilledTokens), billedW))
 		p.line("  " + row)
 	}
+}
+
+// overviewRanking is section 4: every session by what it cost. The figures are
+// each session's own (copied from its analysis), so a row here reads exactly as
+// that session's report does.
+func (p *printer) overviewRanking(o *overview.Report) {
+	if len(o.Ranking) == 0 {
+		return
+	}
+	p.section(4, p.p.S("overview.ranking.title"), p.p.T("overview.ranking.right", i18n.Args{
+		"count": len(o.Ranking), "key": p.sortLabel(o.RankingSort),
+	})+" ")
+
+	showCost, showCredits := false, false
+	for _, r := range o.Ranking {
+		if r.Summary.Cost != nil {
+			showCost = true
+		}
+		if r.Summary.Credits != nil {
+			showCredits = true
+		}
+	}
+	const (
+		minNameW                       = 14
+		runtimeW, costW, creditsW      = 12, 12, 9
+		ctxW, reqW, qW, topW, startedW = 13, 6, 5, 9, 11
+	)
+	numW := max(3, len(fmt.Sprintf("%d", len(o.Ranking)))+1)
+	cols := map[string]int{"runtime": runtimeW, "ctx": ctxW, "req": reqW, "q": qW, "top": topW, "started": startedW}
+	fixed := func() int {
+		w := 2 + numW
+		if showCost {
+			w += costW
+		}
+		if showCredits {
+			w += creditsW
+		}
+		for _, v := range cols {
+			w += v
+		}
+		return w
+	}
+	// Narrow widths drop columns in a fixed order; the number, the session and
+	// the money always stay.
+	for _, k := range []string{"started", "top", "q", "req", "runtime", "ctx"} {
+		if fixed()+minNameW <= p.width {
+			break
+		}
+		cols[k] = 0
+	}
+	nameW := max(p.width-fixed(), minNameW)
+
+	cells := func(num, name, runtime, cost, credits, ctx, req, q, top, started string) string {
+		var b strings.Builder
+		b.WriteString("  " + padW(clipW(num, numW-1), numW))
+		b.WriteString(padW(clipW(name, nameW-1), nameW))
+		if w := cols["runtime"]; w > 0 {
+			b.WriteString(padW(clipW(runtime, w-1), w))
+		}
+		if showCost {
+			b.WriteString(padLeftW(clipW(cost, costW-1), costW))
+		}
+		if showCredits {
+			b.WriteString(padLeftW(clipW(credits, creditsW-1), creditsW))
+		}
+		for _, c := range []struct {
+			w int
+			s string
+		}{{cols["ctx"], ctx}, {cols["req"], req}, {cols["q"], q}, {cols["top"], top}, {cols["started"], started}} {
+			if c.w > 0 {
+				b.WriteString(padLeftW(clipW(c.s, c.w-1), c.w))
+			}
+		}
+		return strings.TrimRight(b.String(), " ")
+	}
+
+	p.line(p.dim(cells("", p.t("overview.col.session"), p.p.S("history.col.runtime"),
+		p.p.S("overview.col.cost"), p.p.S("overview.col.credits"), p.t("overview.col.context"),
+		p.p.S("questions.col.requests"), p.p.S("overview.col.questions"), p.p.S("overview.col.top"),
+		p.p.S("overview.col.started"))))
+
+	differs := false
+	for i, r := range o.Ranking {
+		if i >= p.topN && !p.verb {
+			p.detail(p.p.T("overview.ranking.more", i18n.Args{"count": len(o.Ranking) - i}))
+			break
+		}
+		s := r.Summary
+		cost := ""
+		if s.Cost != nil {
+			cost = p.costText(s.Cost, s.CostPartial)
+			if r.PricingDiffers {
+				cost += "≠"
+				differs = true
+			}
+		}
+		credits := ""
+		if showCredits {
+			credits = "—"
+			if s.Credits != nil {
+				credits = p.creditsText(s.Credits, s.CreditsPartial)
+			}
+		}
+		// A session that predates the split, or could not be split, has no
+		// question count: a dash, never 0.
+		questions, top := "—", "—"
+		if !s.Legacy && !s.QuestionsUnknown {
+			questions = fmt.Sprintf("%d", s.Questions)
+			if t := s.Top; t != nil {
+				top = p.topText(t)
+			}
+		}
+		started := "—"
+		if r.StartUnix > 0 {
+			started = time.Unix(r.StartUnix, 0).Local().Format("2006-01-02")
+		}
+		name := r.Title
+		if name == "" {
+			name = r.SessionID
+		}
+		p.line(cells(fmt.Sprintf("%d", i+1), name, r.Adapter, cost, credits,
+			tokenText(s.Exposure, s.TokensPartial), fmt.Sprintf("%d", s.Requests),
+			questions, top, started))
+		if p.verb {
+			p.line("     " + p.dim(clipW(r.Path, p.width-5)))
+		}
+	}
+	if differs {
+		p.wrap("  ", 2, p.p.S("overview.ranking.differs"))
+	}
+	// The ~ amounts are estimates whatever the order; ordered by cost, the note
+	// also points to the credits order.
+	if o.RankingModelled {
+		note := p.p.S("overview.ranking.modelled")
+		if o.RankingSort == analyzer.SortCost {
+			note = p.p.S("overview.ranking.modelled.cost")
+		}
+		p.wrap("  ", 2, note)
+	}
+}
+
+// topText names the costliest segment of a session: "#3 41%", or a bucket.
+func (p *printer) topText(t *analyzer.TopSegment) string {
+	share := report.PctRound(t.Share)
+	switch {
+	case t.Question > 0:
+		return fmt.Sprintf("#%d %s", t.Question, share)
+	case t.Bucket == analyzer.SegmentUnattributed:
+		return p.p.S("questions.bucket.unattributed.short") + " " + share
+	}
+	return p.p.S("questions.bucket.before_first.short") + " " + share
 }
 
 func (p *printer) overviewFooter(o *overview.Report) {

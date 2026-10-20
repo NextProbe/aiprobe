@@ -158,6 +158,11 @@ type Result struct {
 	// statement and is rendered differently.
 	Spend *Spend `json:"spend,omitempty"`
 
+	// Questions splits the session at the questions a person asked. Absent from
+	// analyses produced before the section existed, which is how a reader tells
+	// the two apart.
+	Questions *Questions `json:"questions,omitempty"`
+
 	// Trace is the parsed session. It is not serialized: it holds raw prompt
 	// and file content, which AIProbe never writes out.
 	Trace *trace.Trace `json:"-"`
@@ -242,6 +247,9 @@ func Run(tr *trace.Trace, opts Options) (*Result, error) {
 	if res.Spend != nil && res.Spend.Known {
 		attachCosts(res.Recommendations, opts.Pricing, res.Spend)
 	}
+	// After the spend, because the questions are priced with the same table and
+	// must add up to it; independent of TopN, because the list is never cut here.
+	res.Questions = buildQuestions(tr, res, opts.Pricing)
 	return res, nil
 }
 

@@ -31,10 +31,9 @@ const historyTemplate = `<!DOCTYPE html>
 <meta name="robots" content="noindex, nofollow">
 <title>{{T "history.title"}} · {{T "app.name"}}</title>
 <style>` + serveCSS + `
-.spark{width:110px;height:26px;vertical-align:middle}
-/* A timestamp broken across three lines is unreadable and makes every row taller
-   than the content needs. */
-td.when{white-space:nowrap}
+.spark{width:96px;height:26px;vertical-align:middle}
+/* The trend's label may take two lines, so the column is as wide as the chart. */
+th.trend{white-space:normal}
 .delta{font-family:var(--mono);font-size:12px}
 .delta.up{color:var(--good)}
 .delta.down{color:var(--bad)}
@@ -82,18 +81,26 @@ td.when{white-space:nowrap}
   {{- else}}
 
   <div class="card">
-    <h2>{{T "history.title"}}<span class="count">{{Targs "history.count" "count" .Analyses "sessions" .Sessions}}</span></h2>
+    <h2>{{T "history.title"}}<span class="count">{{Targs "history.count" "count" .Analyses "sessions" .Sessions}}{{if .Rows}} <a class="btn" href="/overview?adapter=all&amp;lang={{.Locale}}#panel-ranking">{{T "serve.ranking.link"}}</a>{{end}}</span></h2>
     {{- if .Rows}}
+    {{- /* Compact so every column, the trend and the button included, fits a
+           laptop window; the scroll container is the safety net. */}}
+    <div class="tbl-scroll">
     <table>
       <thead>
         <tr>
-          <th style="width:30%">{{T "history.col.session"}}</th>
+          <th>{{T "history.col.session"}}</th>
           <th class="hide-sm">{{T "history.col.runtime"}}</th>
           <th class="hide-sm">{{T "history.col.when"}}</th>
+          {{- if .ShowCost}}
+          <th class="num">{{T "history.col.cost"}}</th>
+          {{- end}}
+          <th class="num hide-sm">{{T "history.col.credits"}}</th>
+          <th class="num hide-sm">{{T "history.col.questions"}}</th>
           <th class="num">{{T "history.col.context"}}</th>
           <th class="num">{{T "history.col.waste"}}</th>
           <th class="num">{{T "history.col.score"}}</th>
-          <th class="hide-sm" style="width:190px">{{T "history.col.trend"}}</th>
+          <th class="hide-sm trend" style="width:140px">{{T "history.col.trend"}}</th>
           <th></th>
         </tr>
       </thead>
@@ -101,14 +108,29 @@ td.when{white-space:nowrap}
         {{- range .Rows}}
         <tr>
           <td>
-            <div class="title">{{clip .Entry.Title 52}}</div>
-            <div class="faint mono">{{clip .Entry.SessionID 40}}{{if .Entry.Model}} · {{.Entry.Model}}{{end}}</div>
+            {{- /* Cleaned like the Sessions page and the ranking; same tip
+                   thresholds as the Sessions page (index.go). */}}
+            {{- $name := line .Entry.Title 80}}
+            {{- $idl := .Entry.SessionID}}{{if .Entry.Model}}{{$idl = printf "%s · %s" .Entry.SessionID .Entry.Model}}{{end}}
+            <div class="title ell"{{with tip $name 17}} title="{{.}}"{{end}}>{{$name}}</div>
+            <div class="faint mono ell"{{with tip $idl 23}} title="{{.}}"{{end}}>{{$idl}}</div>
             {{- if .Stale}}<div class="faint">{{T "history.stale"}}</div>{{end}}
           </td>
           <td class="hide-sm">
             <span class="tag {{runtimeclass .Entry.Adapter}}">{{.Entry.Adapter}}</span>
           </td>
           <td class="hide-sm faint when">{{when .Entry.AnalyzedAt}}</td>
+          {{- /* Copied from the index; an entry written before it carried a cost
+                 row shows dashes, not zeros. */}}
+          {{- if $.ShowCost}}
+          <td class="num">{{scost .Entry.Summary}}{{if .PricingDiffers}} <span class="tag" title="{{T "serve.cost.differs"}}">≠</span>{{end}}</td>
+          {{- end}}
+          <td class="num faint hide-sm">{{scredits .Entry.Summary}}</td>
+          {{- if .Legacy}}
+          <td class="num faint hide-sm state" title="{{T "serve.stored.legacy.hint"}}">{{T "serve.stored.legacy"}}</td>
+          {{- else}}
+          <td class="num hide-sm">{{squestions .Entry.Summary}}</td>
+          {{- end}}
           <td class="num faint">{{if .Entry.Measured}}{{int .Entry.ContextTokens}}{{else}}~{{int .Entry.ContextTokens}}{{end}}</td>
           <td class="num">~{{int .Entry.Wasted}}</td>
           <td class="num"><span class="{{scoreclass .Entry.Score}}">{{if .Entry.Grade}}{{.Entry.Score}} {{.Entry.Grade}}{{else}}-{{end}}</span></td>
@@ -133,6 +155,10 @@ td.when{white-space:nowrap}
         {{- end}}
       </tbody>
     </table>
+    </div>
+    {{- if .CostDiffers}}
+    <p class="faint" style="margin:0;padding:10px 14px;border-top:1px solid var(--border)">{{T "serve.cost.differs"}}</p>
+    {{- end}}
     {{- else}}
     <div class="empty">{{T "history.none"}}</div>
     {{- end}}

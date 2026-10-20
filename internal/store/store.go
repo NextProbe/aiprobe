@@ -34,7 +34,11 @@
 //	analyses/<id>.json  the full report, byte-identical to `aiprobe --json`
 //
 // Nothing here contains prompt text, file contents or command output; it holds
-// exactly what a report holds, because it *is* the report.
+// exactly what a report holds, because it *is* the report. Question previews are
+// never written here (report.WriteJSON strips them unconditionally). The one
+// field that can quote a prompt is a session's title: it is the runtime's own,
+// and some runtimes (Codex) title a session with the first line of its first
+// message.
 package store
 
 import (
@@ -119,6 +123,11 @@ type Entry struct {
 	// time, kept so a stale entry can be recognised without stat-ing again.
 	SizeBytes   int64 `json:"size_bytes"`
 	ModTimeUnix int64 `json:"mod_time_unix"`
+
+	// Summary is the session's cost row, copied from the analysis so the
+	// Sessions and History pages can show it from the index alone. Nil on
+	// entries written before it existed, which those pages show as "—".
+	Summary *analyzer.CostSummary `json:"summary,omitempty"`
 }
 
 // Stale reports whether an entry was produced by a different build.
@@ -331,6 +340,9 @@ func (s *Store) Put(res *analyzer.Result, meta PutMeta) (Entry, error) {
 	if res.Score != nil {
 		e.Score, e.Grade = res.Score.Value, res.Score.Grade
 	}
+	// Copied, never re-summed: the row a listing shows is the report's own.
+	sum := analyzer.SummaryOf(res)
+	e.Summary = &sum
 
 	if err := s.writeResult(e.ID, res); err != nil {
 		return Entry{}, err

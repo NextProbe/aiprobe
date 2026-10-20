@@ -88,7 +88,7 @@ them, addressed as `path#<id>`. If your runtime is like the latter, `Discover` i
 what enumerates the conversations, and a bare path must pick one and say so rather
 than blending several.
 
-Parsing the JSON is the easy part. **Four questions decide whether the resulting
+Parsing the JSON is the easy part. **Five questions decide whether the resulting
 report is honest**, and they are worth answering before writing any code:
 
 1. **Does the runtime record provider token usage, per request?** If yes, those
@@ -119,6 +119,23 @@ report is honest**, and they are worth answering before writing any code:
 
    The line to hold is that "unverifiable" has to be visible to the reader, not merely
    recorded in the capability table.
+5. **Which messages did a person write?** The questions section splits a session at
+   every message a person wrote, and only the adapter can tell those apart from what
+   the runtime, a hook or a workflow put into the conversation. Once you classify,
+   set `Trace.Prompts = trace.PromptsClassified` and give every user-role event an
+   `Origin`: `prompt`, `command` or `shell` for what a person typed (these open a
+   question), `preamble` for the wrapper the runtime writes in front of every prompt,
+   `injected` for everything else. Put the text a person would recognise in
+   `Display` (a slash command with its arguments, never command output), record
+   `Signal` on interruptions and failed turns, and add `Turns` when the runtime
+   reports its own turns or per-turn charges, with `Start = -1` only when a turn's
+   counts really sit on a request chosen by position. Set `UnreportedUsage`,
+   `UnreadableUserRecords` and `CreditsUnavailable` (with its reason id) where they
+   apply. Read new transcript fields as `json.RawMessage` and decode them in the
+   branch that needs them, so a field of an unexpected shape counts as missing
+   rather than costing the whole line. An adapter that classifies nothing still
+   works: the report shows the session as one bucket and says the split is
+   unavailable.
 
 Before opening the pull request:
 
@@ -131,6 +148,8 @@ Before opening the pull request:
 - [ ] Undecodable lines are counted and skipped, never fatal.
 - [ ] Missing quantities are `OptInt`/`OptFloat` unknowns, not zeros, all the way into
       the JSON.
+- [ ] Every user-role event has an `Origin`, and `Trace.Prompts` says whether they
+      were classified.
 - [ ] Tests cover a normal session, a truncated file, an empty file, and a session with
       no tool calls.
 - [ ] **Fixtures are synthetic.** Never commit a real transcript: they contain prompts
